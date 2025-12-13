@@ -5,15 +5,12 @@ Trains ResNet18 from torchvision on FashionMNIST dataset using distributed train
 Uses the same model as single_gpu_baseline.py for fair comparison.
 
 Usage:
-    torchrun --nproc_per_node=2 code/multi_gpu_ddp.py
-
-Or use the launch script:
+    # Set OMP_NUM_THREADS before running to avoid warning
+    OMP_NUM_THREADS=4 torchrun --nproc_per_node=2 code/multi_gpu_ddp.py
+    
+    # Or use the launch script (sets OMP_NUM_THREADS automatically)
     bash code/launch_torchrun.sh
 """
-import os
-# Set OMP_NUM_THREADS to avoid torchrun warning
-os.environ['OMP_NUM_THREADS'] = '4'
-
 import torch
 import torch.distributed as dist
 import torch.nn as nn

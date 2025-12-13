@@ -3,10 +3,6 @@ Single-GPU training baseline for comparison with distributed training.
 
 Trains ResNet18 from torchvision on FashionMNIST dataset.
 """
-import os
-# Set OMP_NUM_THREADS to avoid torchrun warning
-os.environ['OMP_NUM_THREADS'] = '4'
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
