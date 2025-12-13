@@ -14,6 +14,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.data import TensorDataset
 import os
+import time
 
 def setup():
     """Initialize the process group using torchrun environment variables"""
@@ -55,6 +56,7 @@ def train_ddp():
     
     # Training loop
     model.train()
+    start_time = time.time()
     for epoch in range(10):
         sampler.set_epoch(epoch)  # Important for shuffling
         epoch_loss = 0.0
@@ -72,6 +74,11 @@ def train_ddp():
         
         if rank == 0:
             print(f"Epoch {epoch+1}/10, Loss: {epoch_loss/len(dataloader):.4f}", flush=True)
+    
+    total_time = time.time() - start_time
+    if rank == 0:
+        print(f"\nTotal training time: {total_time:.2f}s")
+        print(f"Peak memory: {torch.cuda.max_memory_allocated()/1024**3:.2f} GB")
     
     cleanup()
 
