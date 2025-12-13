@@ -10,6 +10,10 @@ Usage:
 Or use the launch script:
     bash code/launch_torchrun.sh
 """
+import os
+# Set OMP_NUM_THREADS to avoid torchrun warning
+os.environ['OMP_NUM_THREADS'] = '4'
+
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -17,7 +21,6 @@ import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, transforms
-import os
 import time
 from mdaisy import get_resnet18_fashionmnist
 
