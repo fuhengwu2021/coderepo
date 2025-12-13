@@ -6,7 +6,7 @@ rank identification, and basic communication. It doesn't use DDP - it's just
 testing that multiple processes can communicate.
 
 Usage:
-    OMP_NUM_THREADS=8 torchrun --nproc_per_node=2 code/chapter1/ch01_distributed_basic_test.py
+    torchrun --nproc_per_node=2 code/distributed_basic_test.py
 
 Expected output:
     Rank 0 says hello.

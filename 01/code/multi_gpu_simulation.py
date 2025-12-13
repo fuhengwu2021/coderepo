@@ -11,16 +11,16 @@ The script can optionally use CUDA Multi-Process Service (MPS) to efficiently sh
 a single GPU among multiple processes, reducing context switching overhead. MPS is
 optional - the script works without it, but performance may be better with MPS enabled.
 
-Usage (run from the book root directory):
+Usage:
     # Option 1: With MPS (recommended for better performance)
     # Step 1: Start MPS daemon (only needed once, requires sudo)
     sudo nvidia-cuda-mps-control -d
     
     # Step 2: Run the simulation (2 processes on GPU 0)
-    CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=4 torchrun --nproc_per_node=2 code/chapter1/ch01_multi_gpu_simulation.py
+    CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=2 code/multi_gpu_simulation.py
     
     # Option 2: Without MPS (works but may have higher context switching overhead)
-    CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=4 torchrun --nproc_per_node=2 code/chapter1/ch01_multi_gpu_simulation.py
+    CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=2 code/multi_gpu_simulation.py
 
 Expected output:
     Rank 0 says hello.

@@ -2,10 +2,10 @@
 First multi-GPU distributed training using PyTorch DDP.
 
 Usage:
-    OMP_NUM_THREADS=4 torchrun --nproc_per_node=2 code/chapter1/ch01_multi_gpu_ddp.py
+    torchrun --nproc_per_node=2 code/multi_gpu_ddp.py
 
 Or use the launch script:
-    bash distributedai/code/chapter1/ch01_launch_torchrun.sh
+    bash code/launch_torchrun.sh
 """
 import torch
 import torch.distributed as dist
