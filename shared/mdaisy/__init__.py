@@ -8,8 +8,8 @@ This package provides utilities for distributed PyTorch operations including:
 - Point-to-point communication demos
 """
 
-from .utils import init_distributed, sync_print, run_distributed, get_node_info
+from .utils import init_distributed, sync_print, run_distributed, get_node_info, get_resnet18_fashionmnist
 
 __version__ = "0.1.0"
-__all__ = ['init_distributed', 'sync_print', 'run_distributed', 'get_node_info']
+__all__ = ['init_distributed', 'sync_print', 'run_distributed', 'get_node_info', 'get_resnet18_fashionmnist']
 

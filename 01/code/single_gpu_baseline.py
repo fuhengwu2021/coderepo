@@ -8,16 +8,8 @@ import torch.nn as nn
 import torch.optim as optim
 import time
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms, models
-
-def get_model(num_classes=10):
-    """Get ResNet18 model adapted for 1-channel FashionMNIST input"""
-    model = models.resnet18(weights=None)  # Use pretrained=False for random init
-    # Modify first conv layer to accept 1 channel instead of 3
-    model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-    # Modify last fully connected layer for 10 classes
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
-    return model
+from torchvision import datasets, transforms
+from mdaisy import get_resnet18_fashionmnist
 
 def train_single_gpu():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -34,7 +26,7 @@ def train_single_gpu():
     train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=2)
     
     # Model setup
-    model = get_model(num_classes=10).to(device)
+    model = get_resnet18_fashionmnist(num_classes=10).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     

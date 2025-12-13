@@ -5,6 +5,8 @@ Shared utilities for distributed PyTorch operations.
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import torch.nn as nn
+from torchvision import models
 import os
 import sys
 import time
@@ -216,4 +218,26 @@ def get_node_info():
                 info['node_rank'] = rank // local_world_size
     
     return info
+
+
+def get_resnet18_fashionmnist(num_classes=10):
+    """
+    Get ResNet18 model adapted for 1-channel FashionMNIST input.
+    
+    This function creates a ResNet18 model from torchvision and modifies it
+    to work with FashionMNIST's 1-channel grayscale images instead of the
+    default 3-channel RGB images.
+    
+    Args:
+        num_classes: Number of output classes (default: 10 for FashionMNIST)
+    
+    Returns:
+        torch.nn.Module: ResNet18 model adapted for FashionMNIST
+    """
+    model = models.resnet18(weights=None)  # Use pretrained=False for random init
+    # Modify first conv layer to accept 1 channel instead of 3
+    model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    # Modify last fully connected layer for specified number of classes
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    return model
 

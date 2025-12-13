@@ -16,18 +16,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
-from torchvision import datasets, transforms, models
+from torchvision import datasets, transforms
 import os
 import time
-
-def get_model(num_classes=10):
-    """Get ResNet18 model adapted for 1-channel FashionMNIST input"""
-    model = models.resnet18(weights=None)  # Use pretrained=False for random init
-    # Modify first conv layer to accept 1 channel instead of 3
-    model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-    # Modify last fully connected layer for 10 classes
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
-    return model
+from mdaisy import get_resnet18_fashionmnist
 
 def setup():
     """Initialize the process group using torchrun environment variables"""
@@ -61,7 +53,7 @@ def train_ddp():
     )
     
     # Create model (same as single_gpu_baseline.py)
-    model = get_model(num_classes=10).cuda()
+    model = get_resnet18_fashionmnist(num_classes=10).cuda()
     
     # Wrap with DDP
     model = DDP(model, device_ids=[local_rank])
