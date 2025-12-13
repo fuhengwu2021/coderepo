@@ -119,6 +119,12 @@ def init_distributed(use_cpu=False):
         init_kwargs = {'backend': backend}
         if not use_cpu and torch.cuda.is_available():
             init_kwargs['device_id'] = local_rank
+        
+        # Suppress NCCL warning about unbatched P2P ops for demos
+        # This warning appears when using send/recv operations
+        if backend == 'nccl' and 'TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING' not in os.environ:
+            os.environ['TORCH_NCCL_SHOW_EAGER_INIT_P2P_SERIALIZATION_WARNING'] = 'false'
+        
         dist.init_process_group(**init_kwargs)
     
     return rank, world_size, device, local_rank
