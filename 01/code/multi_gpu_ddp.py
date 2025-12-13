@@ -18,6 +18,7 @@ import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, transforms
+import os
 import time
 from mdaisy import get_resnet18_fashionmnist
 
