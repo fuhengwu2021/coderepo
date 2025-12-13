@@ -8,11 +8,11 @@ In a sum allreduce operation between k ranks, each rank will provide an array in
 and receive identical results in array out of N values, where out[i] = in0[i]+in1[i]+…+in(k-1)[i].
 
 Usage:
-    # Run with 4 processes (4 GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_allreduce.py
+    # Run with 2 processes
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_allreduce.py
     
     # Or with CPU (for testing without GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_allreduce.py --use_cpu
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_allreduce.py --use_cpu
 """
 
 import torch

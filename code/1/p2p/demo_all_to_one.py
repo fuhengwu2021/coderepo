@@ -5,11 +5,11 @@ All-to-one (gather): An all-to-one operation to a root rank would be implemented
 by having all ranks send their data to the root rank, which receives from all ranks.
 
 Usage:
-    # Run with 4 processes
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_all_to_one.py
+    # Run with 2 processes
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_all_to_one.py
     
     # Or with CPU (for testing without GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_all_to_one.py --use_cpu
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_all_to_one.py --use_cpu
 """
 
 import torch

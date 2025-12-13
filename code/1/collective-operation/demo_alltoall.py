@@ -7,16 +7,17 @@ Each rank receives an output buffer of size k*N values, where the i-th chunk of 
 comes from source rank i.
 
 Usage:
-    # Run with 4 processes (4 GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_alltoall.py
+    # Run with 2 processes
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_alltoall.py
     
     # Or with CPU (for testing without GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_alltoall.py --use_cpu
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_alltoall.py --use_cpu
 """
 
 import torch
 import torch.distributed as dist
 import argparse
+import sys
 from mdaisy import init_distributed, sync_print
 
 def demo_alltoall(rank, world_size, device):
@@ -55,14 +56,34 @@ def main():
     
     rank, world_size, device, local_rank = init_distributed(args.use_cpu)
     
+    # Check if backend supports alltoall BEFORE any other output
+    if world_size > 1:
+        backend = dist.get_backend()
+        if backend == 'gloo':
+            # Synchronize all ranks before printing error
+            dist.barrier()
+            error_msg = (
+                f"\n{'='*60}\n"
+                f"ERROR: Backend 'gloo' does not support alltoall operation!\n"
+                f"{'='*60}\n"
+                f"Solutions:\n"
+                f"  1. Use GPUs (remove --use_cpu flag):\n"
+                f"     OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_alltoall.py\n"
+                f"  2. Install MPI and use MPI backend (if available)\n"
+                f"  3. Use a different collective operation that gloo supports\n"
+                f"{'='*60}\n"
+            )
+            if rank == 0:
+                print(error_msg)
+            # Clean exit: all processes synchronized, exit with 0 to avoid torchrun error reporting
+            dist.destroy_process_group()
+            sys.exit(0)
+        dist.barrier()
+    
     print(f"\n{'#'*60}")
     print(f"PyTorch AlltoAll Collective Operation Demo")
     print(f"Rank: {rank}, World Size: {world_size}, Device: {device}")
     print(f"{'#'*60}")
-    
-    # Synchronize before starting demo
-    if world_size > 1:
-        dist.barrier()
     
     try:
         demo_alltoall(rank, world_size, device)

@@ -5,12 +5,21 @@ Neighbor exchange: Exchanging data with neighbors in an N-dimensional space.
 This is useful for stencil computations, where each rank needs to exchange 
 data with its neighbors in each dimension.
 
+Note on topology:
+    - With 2 processes: Uses 1D topology (since 2 is not a perfect square)
+    - With 4, 9, or 16 processes: Uses 2D grid topology (perfect squares)
+    - For CPU validation, 2 processes is sufficient
+    - For demonstrating 2D topology, use 4, 9, or 16 processes
+
 Usage:
-    # Run with 4 processes (for 2D grid: 2x2)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_neighbor_exchange.py
+    # Run with 2 processes (uses 1D topology)
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_neighbor_exchange.py
     
     # Or with CPU (for testing without GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_neighbor_exchange.py --use_cpu
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_neighbor_exchange.py --use_cpu
+    
+    # For 2D grid topology, use 4, 9, or 16 processes (perfect squares)
+    # OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_neighbor_exchange.py
 """
 
 import torch

@@ -8,11 +8,11 @@ Important note: The root argument is one of the ranks, not a device number,
 and is therefore impacted by a different rank to device mapping.
 
 Usage:
-    # Run with 4 processes (4 GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_scatter.py
+    # Run with 2 processes
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_scatter.py
     
     # Or with CPU (for testing without GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_scatter.py --use_cpu
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_scatter.py --use_cpu
 """
 
 import torch

@@ -6,11 +6,11 @@ to/from all peers. Each rank sends different data to every other rank and receiv
 different data from every other rank.
 
 Usage:
-    # Run with 4 processes
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_all_to_all.py
+    # Run with 2 processes
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_all_to_all.py
     
     # Or with CPU (for testing without GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_all_to_all.py --use_cpu
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_all_to_all.py --use_cpu
 """
 
 import torch

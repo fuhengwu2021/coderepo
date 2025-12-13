@@ -10,11 +10,11 @@ impacted by a different rank to device mapping.
 Note: Executing ReduceScatter, followed by AllGather, is equivalent to the AllReduce operation.
 
 Usage:
-    # Run with 4 processes (4 GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_allgather.py
+    # Run with 2 processes
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_allgather.py
     
     # Or with CPU (for testing without GPUs)
-    OMP_NUM_THREADS=1 torchrun --nproc_per_node=4 demo_allgather.py --use_cpu
+    OMP_NUM_THREADS=1 torchrun --nproc_per_node=2 demo_allgather.py --use_cpu
 """
 
 import torch
