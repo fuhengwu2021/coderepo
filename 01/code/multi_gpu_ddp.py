@@ -27,7 +27,7 @@ def setup():
     # torchrun sets these environment variables automatically
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
     torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl", device_id=local_rank)
+    dist.init_process_group("nccl")
     rank = dist.get_rank()
     return rank, dist.get_world_size(), local_rank
 
