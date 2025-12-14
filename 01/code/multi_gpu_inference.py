@@ -18,10 +18,11 @@ from mdaisy import get_resnet18_fashionmnist
 
 def setup():
     """Initialize the process group"""
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
     torch.cuda.set_device(local_rank)
+    # Specify device_id to avoid warning about guessing device ID
+    dist.init_process_group("nccl", device_id=local_rank)
+    rank = dist.get_rank()
     return rank, dist.get_world_size(), local_rank
 
 def cleanup():
@@ -59,7 +60,7 @@ def benchmark_distributed_inference(num_requests=1000, batch_size=1):
             _ = model(data)
     
     torch.cuda.synchronize()
-    dist.barrier()  # Sync all GPUs before benchmarking
+    dist.barrier(device_ids=[local_rank])  # Sync all GPUs before benchmarking
     
     # Benchmark - each GPU processes its share of requests
     requests_per_gpu = num_requests // world_size
@@ -75,7 +76,7 @@ def benchmark_distributed_inference(num_requests=1000, batch_size=1):
             requests_processed += batch_size
     
     torch.cuda.synchronize()
-    dist.barrier()  # Wait for all GPUs to finish
+    dist.barrier(device_ids=[local_rank])  # Wait for all GPUs to finish
     
     total_time = time.time() - start_time
     
