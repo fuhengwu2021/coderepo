@@ -60,6 +60,7 @@ def benchmark_inference(num_requests=1000, batch_size=1):
     throughput = requests_processed / total_time
     
     print(f"Processed {requests_processed} requests in {total_time:.2f}s")
+    print(f"Time to finish {requests_processed} requests: {total_time:.2f}s")
     print(f"Throughput: {throughput:.2f} requests/second")
     
     return throughput, total_time

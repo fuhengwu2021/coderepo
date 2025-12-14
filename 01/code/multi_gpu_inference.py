@@ -90,6 +90,7 @@ def benchmark_distributed_inference(num_requests=1000, batch_size=1):
     
     if rank == 0:
         print(f"Processed {total_requests} requests across {world_size} GPUs in {total_time:.2f}s")
+        print(f"Time to finish {total_requests} requests: {total_time:.2f}s")
         print(f"Throughput: {throughput:.2f} requests/second")
     
     cleanup()

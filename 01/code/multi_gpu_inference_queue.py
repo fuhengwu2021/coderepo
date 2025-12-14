@@ -1,7 +1,7 @@
 """
-Multi-GPU distributed inference with request queue pattern.
+Multi-GPU distributed inference with request-split pattern.
 
-This implements a producer-consumer pattern where requests are distributed
+This implements a request-split pattern where requests are distributed
 via round-robin assignment to multiple GPU workers. This simulates a real
 production serving scenario where requests arrive dynamically and are
 assigned to available GPUs.
@@ -37,7 +37,7 @@ def cleanup():
 
 def benchmark_distributed_inference_queue(num_requests=1000, batch_size=1):
     """
-    Benchmark distributed inference using request queue pattern.
+    Benchmark distributed inference using request-split pattern.
     
     In this pattern:
     - Rank 0 acts as the request dispatcher (simulates incoming requests)
@@ -60,20 +60,21 @@ def benchmark_distributed_inference_queue(num_requests=1000, batch_size=1):
     test_dataset = datasets.FashionMNIST(
         root='./data', train=False, download=(rank == 0), transform=transform
     )
-    
-    # Warmup
-    dummy_input = torch.randn(batch_size, 1, 28, 28).cuda()
-    with torch.no_grad():
-        for _ in range(10):
-            _ = model(dummy_input)
-    torch.cuda.synchronize()
-    dist.barrier(device_ids=[local_rank])
-    
-    # Simulate request queue: rank 0 dispatches requests in round-robin
-    # In production, this would be a real queue (Redis, RabbitMQ, etc.)
     test_loader = DataLoader(
         test_dataset, batch_size=batch_size, shuffle=False, num_workers=2
     )
+    
+    # Warmup: Run a few iterations to warm up GPU and CUDA kernels
+    # This avoids cold-start overhead that would skew benchmark results
+    # 10 iterations is typically enough to reach stable performance
+    with torch.no_grad():
+        for i, (data, _) in enumerate(test_loader):
+            if i >= 10:
+                break
+            data = data.cuda()
+            _ = model(data)
+    torch.cuda.synchronize()
+    dist.barrier(device_ids=[local_rank])
     
     # Each GPU tracks its own processed requests
     requests_processed = 0
@@ -119,7 +120,8 @@ def benchmark_distributed_inference_queue(num_requests=1000, batch_size=1):
     throughput = total_requests / total_time
     
     if rank == 0:
-        print(f"[Queue Pattern] Processed {total_requests} requests across {world_size} GPUs in {total_time:.2f}s")
+        print(f"[Request-Split Pattern] Processed {total_requests} requests across {world_size} GPUs in {total_time:.2f}s")
+        print(f"Time to finish {total_requests} requests: {total_time:.2f}s")
         print(f"Throughput: {throughput:.2f} requests/second")
         print(f"Average latency per request: {total_time / total_requests * 1000:.2f} ms")
         print(f"Requests per GPU: {[int(r.item()) for r in gathered_requests]}")
@@ -129,7 +131,7 @@ def benchmark_distributed_inference_queue(num_requests=1000, batch_size=1):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description='Multi-GPU distributed inference with queue pattern')
+    parser = argparse.ArgumentParser(description='Multi-GPU distributed inference with request-split pattern')
     parser.add_argument('--requests', type=int, default=1000, help='Total number of requests to process')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size per request')
     args = parser.parse_args()
