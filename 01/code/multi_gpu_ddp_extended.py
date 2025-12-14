@@ -35,10 +35,10 @@ def get_resnet18_cifar10(num_classes=10):
 
 def setup():
     """Initialize the process group using torchrun environment variables"""
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
     torch.cuda.set_device(local_rank)
+    dist.init_process_group("nccl", device_id=local_rank)
+    rank = dist.get_rank()
     return rank, dist.get_world_size(), local_rank
 
 def cleanup():
@@ -68,7 +68,7 @@ def train_ddp(num_epochs=20):
             root='./data', train=True, download=True, transform=transform_train
         )
     # Wait for rank 0 to finish downloading
-    dist.barrier()
+    dist.barrier(device_ids=[local_rank])
     # Now all ranks can load the dataset
     if rank != 0:
         train_dataset = datasets.CIFAR10(
@@ -86,7 +86,7 @@ def train_ddp(num_epochs=20):
             root='./data', train=False, download=True, transform=transform_test
         )
     # Wait for rank 0 to finish downloading
-    dist.barrier()
+    dist.barrier(device_ids=[local_rank])
     # Now all ranks can load the test dataset
     if rank != 0:
         test_dataset = datasets.CIFAR10(

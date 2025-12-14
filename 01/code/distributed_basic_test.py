@@ -19,10 +19,10 @@ import os
 
 def test_distributed_setup():
     """Test basic distributed process group initialization and communication"""
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
     torch.cuda.set_device(local_rank)
+    dist.init_process_group("nccl", device_id=local_rank)
+    rank = dist.get_rank()
     
     # Print rank and GPU info
     props = torch.cuda.get_device_properties(local_rank)

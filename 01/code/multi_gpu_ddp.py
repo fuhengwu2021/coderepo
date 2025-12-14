@@ -25,10 +25,10 @@ from mdaisy import get_resnet18_fashionmnist
 def setup():
     """Initialize the process group using torchrun environment variables"""
     # torchrun sets these environment variables automatically
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
     local_rank = int(os.environ.get('LOCAL_RANK', 0))
     torch.cuda.set_device(local_rank)
+    dist.init_process_group("nccl", device_id=local_rank)
+    rank = dist.get_rank()
     return rank, dist.get_world_size(), local_rank
 
 def cleanup():
@@ -51,7 +51,7 @@ def train_ddp():
             root='./data', train=True, download=True, transform=transform
         )
     # Wait for rank 0 to finish downloading
-    dist.barrier()
+    dist.barrier(device_ids=[local_rank])
     # Now all ranks can load the dataset
     if rank != 0:
         train_dataset = datasets.FashionMNIST(
