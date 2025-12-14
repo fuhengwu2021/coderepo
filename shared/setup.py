@@ -10,8 +10,8 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name="mdaisy",
     version="0.1.0",
-    author="Your Name",
-    author_email="your.email@example.com",
+    author="Fuheng Wu",
+    author_email="wufuheng@gmail.com",
     description="Distributed computing utilities and demos for PyTorch",
     long_description=long_description,
     long_description_content_type="text/markdown",

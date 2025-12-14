@@ -62,17 +62,37 @@ def train_ddp(num_epochs=20):
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
     ])
     
-    train_dataset = datasets.CIFAR10(
-        root='./data', train=True, download=(rank == 0), transform=transform_train
-    )
+    # Only rank 0 downloads the dataset
+    if rank == 0:
+        train_dataset = datasets.CIFAR10(
+            root='./data', train=True, download=True, transform=transform_train
+        )
+    # Wait for rank 0 to finish downloading
+    dist.barrier()
+    # Now all ranks can load the dataset
+    if rank != 0:
+        train_dataset = datasets.CIFAR10(
+            root='./data', train=True, download=False, transform=transform_train
+        )
+    
     train_sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     train_loader = DataLoader(
         train_dataset, batch_size=128, sampler=train_sampler, num_workers=4, pin_memory=True
     )
     
-    test_dataset = datasets.CIFAR10(
-        root='./data', train=False, download=(rank == 0), transform=transform_test
-    )
+    # Only rank 0 downloads the test dataset
+    if rank == 0:
+        test_dataset = datasets.CIFAR10(
+            root='./data', train=False, download=True, transform=transform_test
+        )
+    # Wait for rank 0 to finish downloading
+    dist.barrier()
+    # Now all ranks can load the test dataset
+    if rank != 0:
+        test_dataset = datasets.CIFAR10(
+            root='./data', train=False, download=False, transform=transform_test
+        )
+    
     test_sampler = DistributedSampler(test_dataset, num_replicas=world_size, rank=rank)
     test_loader = DataLoader(
         test_dataset, batch_size=128, sampler=test_sampler, num_workers=4, pin_memory=True

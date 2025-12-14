@@ -45,9 +45,19 @@ def train_ddp():
         transforms.Normalize((0.5,), (0.5,))
     ])
     
-    train_dataset = datasets.FashionMNIST(
-        root='./data', train=True, download=(rank == 0), transform=transform
-    )
+    # Only rank 0 downloads the dataset
+    if rank == 0:
+        train_dataset = datasets.FashionMNIST(
+            root='./data', train=True, download=True, transform=transform
+        )
+    # Wait for rank 0 to finish downloading
+    dist.barrier()
+    # Now all ranks can load the dataset
+    if rank != 0:
+        train_dataset = datasets.FashionMNIST(
+            root='./data', train=True, download=False, transform=transform
+        )
+    
     sampler = DistributedSampler(train_dataset, num_replicas=world_size, rank=rank)
     train_loader = DataLoader(
         train_dataset, batch_size=128, sampler=sampler, num_workers=2
