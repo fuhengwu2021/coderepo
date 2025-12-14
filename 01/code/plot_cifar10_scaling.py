@@ -16,9 +16,9 @@ fig, ax1 = plt.subplots(1, 1, figsize=(6, 4.5))
 
 # Plot: Training time vs number of GPUs
 ax1.plot(gpus, times, 'o-', linewidth=2, markersize=8, color='#2E86AB')
-ax1.set_xlabel('Number of GPUs', fontsize=12)
-ax1.set_ylabel('Training Time (seconds)', fontsize=12)
-ax1.set_title('CIFAR-10 Training Time vs Number of GPUs\n(20 epochs, ResNet18)', fontsize=14, fontweight='bold', pad=15)
+ax1.set_xlabel('Number of GPUs', fontsize=10)
+ax1.set_ylabel('Training Time (seconds)', fontsize=10)
+ax1.set_title('CIFAR-10 Training Time vs Number of GPUs\n(20 epochs, ResNet18)', fontsize=12, pad=15)
 ax1.grid(True, alpha=0.3)
 ax1.set_xticks(gpus)
 
