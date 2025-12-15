@@ -12,7 +12,7 @@ times = np.array([8.78, 5.91, 3.69, 2.92, 2.44])
 speedup = times[0] / times
 
 # Create figure with single plot
-fig, ax1 = plt.subplots(1, 1, figsize=(6, 4.5))
+fig, ax1 = plt.subplots(1, 1, figsize=(6, 3.25))
 
 # Plot: Training time vs number of GPUs
 ax1.plot(gpus, times, 'o-', linewidth=2, markersize=8, color='#2E86AB')
