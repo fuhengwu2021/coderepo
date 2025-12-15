@@ -60,14 +60,11 @@ Input → Up Projection (Column Parallel) → Activation → Down Projection (Ro
 ### Running the Demo
 
 ```bash
-# Run with 2 GPUs for tensor parallelism
+# Run with 2 processes (uses GPU if 2+ GPUs available, otherwise CPU)
 torchrun --nproc_per_node=2 demo.py
 
-# Run with 4 GPUs
+# Run with 4 processes
 torchrun --nproc_per_node=4 demo.py
-
-# Run with CPU (automatically used if < 2 GPUs available)
-torchrun --nproc_per_node=2 demo.py
 
 # Force CPU usage even if GPUs are available
 torchrun --nproc_per_node=2 demo.py --force-cpu

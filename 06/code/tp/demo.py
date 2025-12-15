@@ -34,26 +34,34 @@ def setup_distributed(force_cpu: bool = False):
     # Check if we should use CPU
     use_cpu = force_cpu or not torch.cuda.is_available() or torch.cuda.device_count() < 2
     
-    # Initialize process group
-    if not dist.is_initialized():
-        backend = "gloo" if use_cpu else "nccl"
-        dist.init_process_group(
-            backend=backend,
-            init_method="env://",
-        )
-    
-    # Set device
+    # Set device first to determine device_id
     if use_cpu:
         device = torch.device("cpu")
+        device_id = None
     else:
         # Use GPU, but make sure we don't exceed available GPUs
         num_gpus = torch.cuda.device_count()
         if local_rank >= num_gpus:
             print(f"Warning: local_rank {local_rank} >= num_gpus {num_gpus}, using CPU instead")
             device = torch.device("cpu")
+            device_id = None
+            use_cpu = True  # Update flag
         else:
             torch.cuda.set_device(local_rank)
             device = torch.device(f"cuda:{local_rank}")
+            device_id = local_rank
+    
+    # Initialize process group
+    if not dist.is_initialized():
+        backend = "gloo" if use_cpu else "nccl"
+        # For NCCL backend, ensure device is set before initialization
+        # This helps suppress the barrier() warning about device context
+        if backend == "nccl" and device_id is not None:
+            torch.cuda.set_device(device_id)
+        dist.init_process_group(
+            backend=backend,
+            init_method="env://",
+        )
     
     return rank, world_size, device, use_cpu
 
@@ -217,6 +225,11 @@ def main():
     
     rank, world_size, device, use_cpu = setup_distributed(force_cpu=args.force_cpu)
     
+    # Get device_id for barrier (if using GPU)
+    device_id = None
+    if not use_cpu and torch.cuda.is_available() and device.type == "cuda":
+        device_id = device.index if device.index is not None else 0
+    
     # Initialize tensor parallelism
     tp_size = 2  # Use 2 processes for tensor parallelism
     if world_size >= tp_size:
@@ -252,7 +265,12 @@ def main():
         print("Run with: torchrun --nproc_per_node=2 demo.py")
     
     # Cleanup
+    # Ensure we're on the correct device before barrier to avoid warning
+    # This suppresses the "barrier(): using the device under current context" warning
+    if not use_cpu and torch.cuda.is_available() and device_id is not None:
+        torch.cuda.set_device(device_id)
     dist.barrier()
+    
     if rank == 0:
         print("\n" + "="*60)
         print("Demo completed!")
