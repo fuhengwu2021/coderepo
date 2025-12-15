@@ -1,0 +1,140 @@
+🌟 $python code/single_gpu_extended.py --epochs 20
+100.0%
+Training ResNet18 on CIFAR-10 for 20 epochs...
+Training samples: 50000, Test samples: 10000
+------------------------------------------------------------
+Epoch  1/20 | Loss: 1.3658 | Train Acc: 49.97% | Test Acc: 62.75% | LR: 0.001000
+Epoch  2/20 | Loss: 0.8797 | Train Acc: 68.85% | Test Acc: 72.32% | LR: 0.001000
+Epoch  3/20 | Loss: 0.6827 | Train Acc: 76.12% | Test Acc: 78.19% | LR: 0.001000
+Epoch  4/20 | Loss: 0.5690 | Train Acc: 80.11% | Test Acc: 72.87% | LR: 0.001000
+Epoch  5/20 | Loss: 0.4996 | Train Acc: 82.65% | Test Acc: 76.75% | LR: 0.001000
+Epoch  6/20 | Loss: 0.4446 | Train Acc: 84.72% | Test Acc: 82.46% | LR: 0.001000
+Epoch  7/20 | Loss: 0.3991 | Train Acc: 86.30% | Test Acc: 82.00% | LR: 0.000700
+Epoch  8/20 | Loss: 0.3286 | Train Acc: 88.61% | Test Acc: 86.61% | LR: 0.000700
+Epoch  9/20 | Loss: 0.2996 | Train Acc: 89.67% | Test Acc: 86.71% | LR: 0.000700
+Epoch 10/20 | Loss: 0.2753 | Train Acc: 90.45% | Test Acc: 86.93% | LR: 0.000700
+Epoch 11/20 | Loss: 0.2587 | Train Acc: 91.09% | Test Acc: 88.21% | LR: 0.000700
+Epoch 12/20 | Loss: 0.2446 | Train Acc: 91.46% | Test Acc: 87.09% | LR: 0.000700
+Epoch 13/20 | Loss: 0.2242 | Train Acc: 92.21% | Test Acc: 89.01% | LR: 0.000700
+Epoch 14/20 | Loss: 0.2102 | Train Acc: 92.64% | Test Acc: 88.63% | LR: 0.000490
+Epoch 15/20 | Loss: 0.1608 | Train Acc: 94.46% | Test Acc: 89.55% | LR: 0.000490
+Epoch 16/20 | Loss: 0.1481 | Train Acc: 94.81% | Test Acc: 90.61% | LR: 0.000490
+Epoch 17/20 | Loss: 0.1394 | Train Acc: 95.19% | Test Acc: 89.56% | LR: 0.000490
+Epoch 18/20 | Loss: 0.1297 | Train Acc: 95.52% | Test Acc: 90.81% | LR: 0.000490
+Epoch 19/20 | Loss: 0.1226 | Train Acc: 95.65% | Test Acc: 90.60% | LR: 0.000490
+Epoch 20/20 | Loss: 0.1118 | Train Acc: 96.09% | Test Acc: 89.50% | LR: 0.000490
+------------------------------------------------------------
+Total training time: 73.00s (1.22 minutes)
+Final test accuracy: 89.50%
+(research) [2081][moirai-h200][12][-bash](23:22:52)[0](fuhwu) : ~/workspace/coderepo/01
+ 🍕 $OMP_NUM_THREADS=4 torchrun --nproc_per_node=2 code/multi_gpu_ddp_extended.py --epochs 20
+Training ResNet18 on CIFAR-10 for 20 epochs with 2 GPUs...
+Training samples: 50000, Test samples: 10000
+------------------------------------------------------------
+Epoch  1/20 | Loss: 1.3784 | Train Acc: 49.68% | Test Acc: 49.06% | LR: 0.001000
+Epoch  2/20 | Loss: 0.8951 | Train Acc: 68.10% | Test Acc: 69.78% | LR: 0.001000
+Epoch  3/20 | Loss: 0.6954 | Train Acc: 75.44% | Test Acc: 75.00% | LR: 0.001000
+Epoch  4/20 | Loss: 0.5934 | Train Acc: 79.28% | Test Acc: 75.34% | LR: 0.001000
+Epoch  5/20 | Loss: 0.5122 | Train Acc: 82.27% | Test Acc: 75.56% | LR: 0.001000
+Epoch  6/20 | Loss: 0.4577 | Train Acc: 84.17% | Test Acc: 79.70% | LR: 0.001000
+Epoch  7/20 | Loss: 0.4087 | Train Acc: 85.89% | Test Acc: 77.86% | LR: 0.000700
+Epoch  8/20 | Loss: 0.3340 | Train Acc: 88.32% | Test Acc: 85.40% | LR: 0.000700
+Epoch  9/20 | Loss: 0.3110 | Train Acc: 89.06% | Test Acc: 83.54% | LR: 0.000700
+Epoch 10/20 | Loss: 0.2889 | Train Acc: 89.74% | Test Acc: 85.10% | LR: 0.000700
+Epoch 11/20 | Loss: 0.2800 | Train Acc: 90.33% | Test Acc: 84.54% | LR: 0.000700
+Epoch 12/20 | Loss: 0.2506 | Train Acc: 91.31% | Test Acc: 86.22% | LR: 0.000700
+Epoch 13/20 | Loss: 0.2338 | Train Acc: 91.82% | Test Acc: 87.50% | LR: 0.000700
+Epoch 14/20 | Loss: 0.2196 | Train Acc: 92.33% | Test Acc: 87.98% | LR: 0.000490
+Epoch 15/20 | Loss: 0.1773 | Train Acc: 93.73% | Test Acc: 88.20% | LR: 0.000490
+Epoch 16/20 | Loss: 0.1579 | Train Acc: 94.43% | Test Acc: 88.10% | LR: 0.000490
+Epoch 17/20 | Loss: 0.1498 | Train Acc: 94.86% | Test Acc: 89.42% | LR: 0.000490
+Epoch 18/20 | Loss: 0.1437 | Train Acc: 94.99% | Test Acc: 88.84% | LR: 0.000490
+Epoch 19/20 | Loss: 0.1356 | Train Acc: 95.10% | Test Acc: 88.62% | LR: 0.000490
+Epoch 20/20 | Loss: 0.1265 | Train Acc: 95.61% | Test Acc: 88.76% | LR: 0.000490
+------------------------------------------------------------
+Total training time: 46.47s (0.77 minutes)
+Final test accuracy: 88.76%
+(research) [2082][moirai-h200][12][-bash](23:23:50)[0](fuhwu) : ~/workspace/coderepo/01
+ 😎 $OMP_NUM_THREADS=4 torchrun --nproc_per_node=4 code/multi_gpu_ddp_extended.py --epochs 20
+Training ResNet18 on CIFAR-10 for 20 epochs with 4 GPUs...
+Training samples: 50000, Test samples: 10000
+------------------------------------------------------------
+Epoch  1/20 | Loss: 1.4676 | Train Acc: 46.62% | Test Acc: 54.84% | LR: 0.001000
+Epoch  2/20 | Loss: 0.9610 | Train Acc: 65.91% | Test Acc: 54.84% | LR: 0.001000
+Epoch  3/20 | Loss: 0.7423 | Train Acc: 73.98% | Test Acc: 73.48% | LR: 0.001000
+Epoch  4/20 | Loss: 0.6322 | Train Acc: 77.74% | Test Acc: 72.28% | LR: 0.001000
+Epoch  5/20 | Loss: 0.5485 | Train Acc: 80.68% | Test Acc: 73.96% | LR: 0.001000
+Epoch  6/20 | Loss: 0.4765 | Train Acc: 83.92% | Test Acc: 78.44% | LR: 0.001000
+Epoch  7/20 | Loss: 0.4254 | Train Acc: 85.06% | Test Acc: 75.88% | LR: 0.000700
+Epoch  8/20 | Loss: 0.3660 | Train Acc: 87.35% | Test Acc: 84.32% | LR: 0.000700
+Epoch  9/20 | Loss: 0.3373 | Train Acc: 88.32% | Test Acc: 84.32% | LR: 0.000700
+Epoch 10/20 | Loss: 0.3066 | Train Acc: 89.17% | Test Acc: 83.64% | LR: 0.000700
+Epoch 11/20 | Loss: 0.2874 | Train Acc: 89.79% | Test Acc: 85.12% | LR: 0.000700
+Epoch 12/20 | Loss: 0.2634 | Train Acc: 90.73% | Test Acc: 83.60% | LR: 0.000700
+Epoch 13/20 | Loss: 0.2438 | Train Acc: 91.55% | Test Acc: 86.40% | LR: 0.000700
+Epoch 14/20 | Loss: 0.2328 | Train Acc: 91.90% | Test Acc: 85.52% | LR: 0.000490
+Epoch 15/20 | Loss: 0.1947 | Train Acc: 93.42% | Test Acc: 85.68% | LR: 0.000490
+Epoch 16/20 | Loss: 0.1707 | Train Acc: 94.06% | Test Acc: 87.56% | LR: 0.000490
+Epoch 17/20 | Loss: 0.1636 | Train Acc: 94.36% | Test Acc: 87.60% | LR: 0.000490
+Epoch 18/20 | Loss: 0.1535 | Train Acc: 94.54% | Test Acc: 88.00% | LR: 0.000490
+Epoch 19/20 | Loss: 0.1407 | Train Acc: 95.00% | Test Acc: 85.00% | LR: 0.000490
+Epoch 20/20 | Loss: 0.1349 | Train Acc: 95.02% | Test Acc: 88.40% | LR: 0.000490
+------------------------------------------------------------
+Total training time: 27.72s (0.46 minutes)
+Final test accuracy: 88.40%
+(research) [2083][moirai-h200][12][-bash](23:24:34)[0](fuhwu) : ~/workspace/coderepo/01
+ 🐱 $OMP_NUM_THREADS=4 torchrun --nproc_per_node=6 code/multi_gpu_ddp_extended.py --epochs 20
+Training ResNet18 on CIFAR-10 for 20 epochs with 6 GPUs...
+Training samples: 50000, Test samples: 10000
+------------------------------------------------------------
+Epoch  1/20 | Loss: 1.5127 | Train Acc: 44.18% | Test Acc: 51.17% | LR: 0.001000
+Epoch  2/20 | Loss: 1.0345 | Train Acc: 63.29% | Test Acc: 62.09% | LR: 0.001000
+Epoch  3/20 | Loss: 0.8355 | Train Acc: 70.18% | Test Acc: 61.85% | LR: 0.001000
+Epoch  4/20 | Loss: 0.7414 | Train Acc: 74.12% | Test Acc: 71.75% | LR: 0.001000
+Epoch  5/20 | Loss: 0.6212 | Train Acc: 78.62% | Test Acc: 73.13% | LR: 0.001000
+Epoch  6/20 | Loss: 0.5524 | Train Acc: 80.80% | Test Acc: 74.99% | LR: 0.001000
+Epoch  7/20 | Loss: 0.4772 | Train Acc: 83.33% | Test Acc: 72.17% | LR: 0.000700
+Epoch  8/20 | Loss: 0.4375 | Train Acc: 85.12% | Test Acc: 81.28% | LR: 0.000700
+Epoch  9/20 | Loss: 0.3904 | Train Acc: 86.38% | Test Acc: 82.18% | LR: 0.000700
+Epoch 10/20 | Loss: 0.3688 | Train Acc: 87.25% | Test Acc: 81.22% | LR: 0.000700
+Epoch 11/20 | Loss: 0.3338 | Train Acc: 88.48% | Test Acc: 83.20% | LR: 0.000700
+Epoch 12/20 | Loss: 0.3234 | Train Acc: 88.58% | Test Acc: 83.32% | LR: 0.000700
+Epoch 13/20 | Loss: 0.3076 | Train Acc: 89.46% | Test Acc: 82.00% | LR: 0.000700
+Epoch 14/20 | Loss: 0.2791 | Train Acc: 90.17% | Test Acc: 82.84% | LR: 0.000490
+Epoch 15/20 | Loss: 0.2518 | Train Acc: 91.42% | Test Acc: 84.22% | LR: 0.000490
+Epoch 16/20 | Loss: 0.2219 | Train Acc: 92.18% | Test Acc: 86.44% | LR: 0.000490
+Epoch 17/20 | Loss: 0.2105 | Train Acc: 92.70% | Test Acc: 88.06% | LR: 0.000490
+Epoch 18/20 | Loss: 0.2029 | Train Acc: 92.92% | Test Acc: 87.04% | LR: 0.000490
+Epoch 19/20 | Loss: 0.1925 | Train Acc: 93.17% | Test Acc: 87.76% | LR: 0.000490
+Epoch 20/20 | Loss: 0.1833 | Train Acc: 93.29% | Test Acc: 86.98% | LR: 0.000490
+------------------------------------------------------------
+Total training time: 21.24s (0.35 minutes)
+Final test accuracy: 86.98%
+(research) [2084][moirai-h200][12][-bash](23:25:14)[0](fuhwu) : ~/workspace/coderepo/01
+ 😀 $OMP_NUM_THREADS=4 torchrun --nproc_per_node=8 code/multi_gpu_ddp_extended.py --epochs 20
+Training ResNet18 on CIFAR-10 for 20 epochs with 8 GPUs...
+Training samples: 50000, Test samples: 10000
+------------------------------------------------------------
+Epoch  1/20 | Loss: 1.5884 | Train Acc: 41.60% | Test Acc: 51.92% | LR: 0.001000
+Epoch  2/20 | Loss: 1.1099 | Train Acc: 59.25% | Test Acc: 62.88% | LR: 0.001000
+Epoch  3/20 | Loss: 0.8811 | Train Acc: 68.58% | Test Acc: 67.28% | LR: 0.001000
+Epoch  4/20 | Loss: 0.7332 | Train Acc: 73.65% | Test Acc: 70.32% | LR: 0.001000
+Epoch  5/20 | Loss: 0.6310 | Train Acc: 77.97% | Test Acc: 71.60% | LR: 0.001000
+Epoch  6/20 | Loss: 0.5307 | Train Acc: 81.66% | Test Acc: 73.92% | LR: 0.001000
+Epoch  7/20 | Loss: 0.4986 | Train Acc: 82.50% | Test Acc: 76.48% | LR: 0.000700
+Epoch  8/20 | Loss: 0.4187 | Train Acc: 85.79% | Test Acc: 80.88% | LR: 0.000700
+Epoch  9/20 | Loss: 0.3916 | Train Acc: 86.88% | Test Acc: 80.24% | LR: 0.000700
+Epoch 10/20 | Loss: 0.3539 | Train Acc: 87.50% | Test Acc: 82.56% | LR: 0.000700
+Epoch 11/20 | Loss: 0.3315 | Train Acc: 88.62% | Test Acc: 80.88% | LR: 0.000700
+Epoch 12/20 | Loss: 0.3185 | Train Acc: 89.17% | Test Acc: 83.36% | LR: 0.000700
+Epoch 13/20 | Loss: 0.3101 | Train Acc: 89.25% | Test Acc: 82.96% | LR: 0.000700
+Epoch 14/20 | Loss: 0.2828 | Train Acc: 90.00% | Test Acc: 80.80% | LR: 0.000490
+Epoch 15/20 | Loss: 0.2347 | Train Acc: 91.68% | Test Acc: 86.80% | LR: 0.000490
+Epoch 16/20 | Loss: 0.2178 | Train Acc: 92.18% | Test Acc: 86.96% | LR: 0.000490
+Epoch 17/20 | Loss: 0.1873 | Train Acc: 93.50% | Test Acc: 87.04% | LR: 0.000490
+Epoch 18/20 | Loss: 0.1954 | Train Acc: 93.10% | Test Acc: 86.64% | LR: 0.000490
+Epoch 19/20 | Loss: 0.1904 | Train Acc: 93.47% | Test Acc: 86.80% | LR: 0.000490
+Epoch 20/20 | Loss: 0.1628 | Train Acc: 93.98% | Test Acc: 86.64% | LR: 0.000490
+------------------------------------------------------------
+Total training time: 18.20s (0.30 minutes)
+Final test accuracy: 86.64%

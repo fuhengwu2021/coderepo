@@ -76,7 +76,8 @@ class ContinuousBatchScheduler:
     def add_sequence(
         self,
         prompt_tokens: List[int],
-        max_new_tokens: int = 50
+        max_new_tokens: int = 50,
+        immediate_prefill: bool = False
     ) -> int:
         """
         Add a new sequence to the scheduler.
@@ -84,6 +85,8 @@ class ContinuousBatchScheduler:
         Args:
             prompt_tokens: Tokenized prompt
             max_new_tokens: Maximum tokens to generate
+            immediate_prefill: If True, sequence is ready for prefill immediately.
+                              If False, stays in PREFILL state for batching.
             
         Returns:
             Sequence ID
@@ -103,6 +106,42 @@ class ContinuousBatchScheduler:
         )
         
         return seq_id
+    
+    def get_prefill_batch(self, max_batch_size: Optional[int] = None) -> Tuple[List[int], List[int], List[int], List[int]]:
+        """
+        Get sequences ready for prefill batching.
+        
+        Returns sequences in PREFILL state that haven't started processing yet.
+        
+        Args:
+            max_batch_size: Maximum number of sequences to include (None = all available)
+            
+        Returns:
+            Tuple of (seq_ids, prompt_token_lists, positions_start, total_tokens)
+            where positions_start indicates where each sequence starts in the flattened array
+        """
+        prefill_seqs = []
+        
+        for seq_id, seq_info in self.sequences.items():
+            if seq_info.state == SequenceState.PREFILL and seq_info.position == 0:
+                prefill_seqs.append(seq_info)
+                if max_batch_size and len(prefill_seqs) >= max_batch_size:
+                    break
+        
+        if not prefill_seqs:
+            return [], [], [], []
+        
+        seq_ids = [s.seq_id for s in prefill_seqs]
+        prompt_token_lists = [s.prompt_tokens for s in prefill_seqs]
+        
+        # Calculate positions_start: where each sequence starts in flattened array
+        positions_start = []
+        total_tokens = 0
+        for s in prefill_seqs:
+            positions_start.append(total_tokens)
+            total_tokens += len(s.prompt_tokens)
+        
+        return seq_ids, prompt_token_lists, positions_start, [len(s.prompt_tokens) for s in prefill_seqs]
     
     def get_batch(
         self,
