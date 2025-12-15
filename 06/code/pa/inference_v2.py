@@ -40,6 +40,7 @@ class PagedAttentionModelWrapperV2:
         model_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
         block_size: int = 16,
         device: str = "cuda",
+        use_online_softmax: bool = True,
     ):
         """
         Initialize the model wrapper.
@@ -48,9 +49,12 @@ class PagedAttentionModelWrapperV2:
             model_name: HuggingFace model name
             block_size: Block size for PagedAttention
             device: Device to use
+            use_online_softmax: If True, use single-pass online softmax (default).
+                                If False, use two-pass safe_softmax algorithm.
         """
         self.device = device
         self.block_size = block_size
+        self.use_online_softmax = use_online_softmax
         
         print(f"Loading model {model_name}...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -67,8 +71,9 @@ class PagedAttentionModelWrapperV2:
         self.head_dim = int(config.hidden_size // config.num_attention_heads)
         self.num_layers = int(config.num_hidden_layers)
         
+        algo_name = "Online Softmax" if use_online_softmax else "Safe Softmax"
         print(f"Model config: {self.num_heads} Q heads, {self.num_kv_heads} KV heads, {self.head_dim} head_dim, {self.num_layers} layers")
-        print(f"Using PagedAttention v2 with Online Softmax (block-streaming)")
+        print(f"Using PagedAttention v2 with {algo_name} (block-streaming)")
         
         # Initialize PagedAttention v2 for each layer
         self.paged_attentions = [
@@ -76,7 +81,8 @@ class PagedAttentionModelWrapperV2:
                 block_size=block_size,
                 num_heads=self.num_heads,
                 head_dim=self.head_dim,
-                device=device
+                device=device,
+                use_online_softmax=use_online_softmax
             )
             for _ in range(self.num_layers)
         ]
@@ -332,24 +338,9 @@ class PagedAttentionModelWrapperV2:
 
 
 def main():
-    """Main function to run inference with PagedAttention v2 (Online Softmax)."""
-    print("=" * 60)
-    print("PagedAttention v2 Inference Demo (Online Softmax)")
-    print("=" * 60)
-    
+    """Main function to run inference with PagedAttention v2 (both algorithms)."""
     # Check if CUDA is available
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-    
-    if device == "cpu":
-        print("Warning: Running on CPU. This will be slow.")
-    
-    # Initialize model wrapper
-    model_wrapper = PagedAttentionModelWrapperV2(
-        model_name="Qwen/Qwen2.5-0.5B-Instruct",
-        block_size=16,
-        device=device
-    )
     
     # Test prompts
     prompts = [
@@ -357,24 +348,43 @@ def main():
         "Explain quantum computing in simple terms.",
     ]
     
-    for i, prompt in enumerate(prompts):
+    # Test both algorithms
+    for use_online in [True, False]:
+        algo_name = "Online Softmax" if use_online else "Safe Softmax"
+        print("\n" + "=" * 60)
+        print(f"PagedAttention v2 Inference Demo ({algo_name})")
+        print("=" * 60)
+        print(f"Using device: {device}")
+        
+        if device == "cpu":
+            print("Warning: Running on CPU. This will be slow.")
+        
+        # Initialize model wrapper
+        model_wrapper = PagedAttentionModelWrapperV2(
+            model_name="Qwen/Qwen2.5-0.5B-Instruct",
+            block_size=16,
+            device=device,
+            use_online_softmax=use_online
+        )
+        
+        # Test first prompt only for comparison
+        prompt = prompts[0]
         print(f"\n{'=' * 60}")
-        print(f"Prompt {i + 1}: {prompt}")
+        print(f"Prompt: {prompt}")
         print(f"{'=' * 60}")
         
         generated = model_wrapper.generate(prompt, max_new_tokens=50)
         
-        print(f"\nGenerated text:")
+        print(f"\nGenerated text ({algo_name}):")
         print(generated)
         print()
-    
-    # Print final stats
-    print(f"\n{'=' * 60}")
-    print("Final Block Manager Stats:")
-    print(f"{'=' * 60}")
-    stats = model_wrapper.paged_attentions[0].get_stats()
-    for key, value in stats.items():
-        print(f"  {key}: {value}")
+        
+        # Print stats
+        print(f"Block Manager Stats ({algo_name}):")
+        stats = model_wrapper.paged_attentions[0].get_stats()
+        for key, value in stats.items():
+            print(f"  {key}: {value}")
+        print()
 
 
 if __name__ == "__main__":
