@@ -15,6 +15,7 @@ Design:
 
 import os
 import sys
+import time
 from typing import Optional, Tuple
 
 import torch
@@ -342,7 +343,7 @@ def main():
     ]
     
     # Test both algorithms
-    for use_online in [True, False]:
+    for use_online in [True, ]: # False
         algo_name = "Online Softmax" if use_online else "Safe Softmax"
         print("\n" + "=" * 60)
         print(f"PagedAttention v2 Inference Demo ({algo_name})")
@@ -360,17 +361,20 @@ def main():
             use_online_softmax=use_online
         )
         
-        # Test first prompt only for comparison
-        prompt = prompts[0]
-        print(f"\n{'=' * 60}")
-        print(f"Prompt: {prompt}")
-        print(f"{'=' * 60}")
-        
-        generated = model_wrapper.generate(prompt, max_new_tokens=50)
-        
-        print(f"\nGenerated text ({algo_name}):")
-        print(generated)
-        print()
+        # Test both prompts
+        for i, prompt in enumerate(prompts):
+            print(f"\n{'=' * 60}")
+            print(f"Prompt {i + 1}: {prompt}")
+            print(f"{'=' * 60}")
+            
+            start_time = time.time()
+            generated = model_wrapper.generate(prompt, max_new_tokens=50)
+            elapsed_time = time.time() - start_time
+            
+            print(f"\nGenerated text ({algo_name}):")
+            print(generated)
+            print(f"\nTime taken: {elapsed_time:.2f} seconds")
+            print()
         
         # Print stats
         print(f"Block Manager Stats ({algo_name}):")

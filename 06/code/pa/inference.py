@@ -14,6 +14,7 @@ Design (intentionally minimal):
 
 import os
 import sys
+import time
 from typing import Optional, Tuple
 
 import torch
@@ -360,10 +361,13 @@ def main():
         print(f"Prompt {i + 1}: {prompt}")
         print(f"{'=' * 60}")
         
+        start_time = time.time()
         generated = model_wrapper.generate(prompt, max_new_tokens=50)
+        elapsed_time = time.time() - start_time
         
         print(f"\nGenerated text:")
         print(generated)
+        print(f"\nTime taken: {elapsed_time:.2f} seconds")
         print()
     
     # Print final stats
