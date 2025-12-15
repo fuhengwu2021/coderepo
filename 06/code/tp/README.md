@@ -55,6 +55,13 @@ Input → Up Projection (Column Parallel) → Activation → Down Projection (Ro
 - `mlp.py`: Implements `TensorParallelMLP` that combines column and row parallelism
 - `demo.py`: Demonstration script showing all concepts
 
+## Dependencies
+
+This demo uses the shared `mdaisy` utility package for distributed initialization:
+- Located at: `resources/coderepo/shared/mdaisy`
+- Install with: `pip install -e resources/coderepo/shared`
+- Or ensure the path is available (the demo will try to add it automatically)
+
 ## Usage
 
 ### Running the Demo

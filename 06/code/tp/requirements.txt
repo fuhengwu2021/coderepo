@@ -1,2 +1,5 @@
 torch>=2.0.0
 
+# Shared utilities (install from project root)
+# pip install -e ../resources/coderepo/shared
+
