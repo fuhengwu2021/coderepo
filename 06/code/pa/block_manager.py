@@ -111,12 +111,12 @@ class BlockManager:
         # Allocate memory for K and V caches
         k_cache = torch.zeros(
             (self.block_size, self.num_heads, self.head_dim),
-            dtype=torch.float16,
+            dtype=(torch.float16 if str(self.device).startswith('cuda') else torch.float32),
             device=self.device
         )
         v_cache = torch.zeros(
             (self.block_size, self.num_heads, self.head_dim),
-            dtype=torch.float16,
+            dtype=(torch.float16 if str(self.device).startswith('cuda') else torch.float32),
             device=self.device
         )
         
@@ -183,6 +183,15 @@ class BlockManager:
             self.sequence_tables[seq_id] = BlockTable(seq_id)
         
         block_table = self.sequence_tables[seq_id]
+
+        # Enforce sequential appends for this minimal demo.
+        # In a full PA implementation, token_idx is used to map logical positions
+        # to physical blocks (supporting out-of-order writes).
+        expected_idx = block_table.get_total_tokens()
+        if token_idx != expected_idx:
+            raise ValueError(
+                f"Non-sequential token_idx for seq_id={seq_id}: got {token_idx}, expected {expected_idx}."
+            )
         
         # Check if last block has space
         last_block = block_table.get_last_block()

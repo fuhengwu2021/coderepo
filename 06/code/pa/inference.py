@@ -1,24 +1,29 @@
-"""
+""" 
 Inference script using custom PagedAttention for KV cache management.
 
 This script demonstrates how to use the custom PagedAttention implementation
-to manage KV cache when doing inference with Qwen/Qwen2.5-0.5B-Instruct.
+for KV cache management and (minimally) integrate it into the attention compute
+path during decode for Qwen/Qwen2.5-0.5B-Instruct.
+
+Design (intentionally minimal):
+- Prefill: use HuggingFace forward(use_cache=True) and write the returned KV
+  (already RoPE'd) into PagedAttention blocks.
+- Decode: run a minimal manual per-layer forward for ONE token, calling
+  PagedAttention.compute_attention(...) so PA participates in the compute path.
 """
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from typing import List, Optional, Tuple
-import sys
 import os
+import sys
+from typing import Optional, Tuple
+
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
 
 # Add parent directory to path to import pa module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pa import PagedAttention
-
-from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
 
 
 class PagedAttentionModelWrapper:
@@ -33,7 +38,7 @@ class PagedAttentionModelWrapper:
         self,
         model_name: str = "Qwen/Qwen2.5-0.5B-Instruct",
         block_size: int = 16,
-        device: str = "cuda"
+        device: str = "cuda",
     ):
         """
         Initialize the model wrapper.
@@ -48,19 +53,18 @@ class PagedAttentionModelWrapper:
         
         print(f"Loading model {model_name}...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            dtype=torch.float16,
-            device_map=device
-        )
+        dtype = torch.float16 if device.startswith("cuda") else torch.float32
+        self.model = AutoModelForCausalLM.from_pretrained(model_name, dtype=dtype)
+        self.model.to(device)
+        self.model.eval()
         
         # Get model config
         config = self.model.config
-        self.num_heads = config.num_attention_heads
+        self.num_heads = int(config.num_attention_heads)
         # Qwen2.5 uses GQA, so K/V might have fewer heads
-        self.num_kv_heads = getattr(config, 'num_key_value_heads', self.num_heads)
-        self.head_dim = config.hidden_size // config.num_attention_heads
-        self.num_layers = config.num_hidden_layers
+        self.num_kv_heads = int(getattr(config, "num_key_value_heads", self.num_heads))
+        self.head_dim = int(config.hidden_size // config.num_attention_heads)
+        self.num_layers = int(config.num_hidden_layers)
         
         print(f"Model config: {self.num_heads} Q heads, {self.num_kv_heads} KV heads, {self.head_dim} head_dim, {self.num_layers} layers")
         
@@ -76,45 +80,56 @@ class PagedAttentionModelWrapper:
         ]
         
         # Track sequences
-        self.sequences: dict[int, dict] = {}  # seq_id -> {prompt_tokens, generated_tokens, ...}
+        self.sequences: dict[int, dict] = {}
         self.next_seq_id = 0
     
-    def _get_attention_layer(self, layer_idx: int):
-        """Get the attention layer from the model."""
-        return self.model.model.layers[layer_idx].self_attn
-    
-    def _apply_rope_hf(
+    def _apply_rope(
         self,
+        attn_module,
         query_states: torch.Tensor,
         key_states: torch.Tensor,
-        position_ids: torch.Tensor
+        position_ids: torch.Tensor,
+        kv_seq_len: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Apply RoPE using HuggingFace's Qwen2Model implementation.
-        
-        This reuses the exact same RoPE logic as Qwen2Model, ensuring correctness.
-        The rotary_emb is at model.model.rotary_emb, not on individual attention layers.
+        Apply RoPE with fallback mechanisms for different transformers versions.
         
         Args:
+            attn_module: Attention module (may have rotary_emb)
             query_states: Query tensor of shape [B, Hq, q_len, D]
             key_states: Key tensor of shape [B, Hkv, q_len, D]
             position_ids: Position IDs of shape [B, q_len]
+            kv_seq_len: Total KV sequence length
             
         Returns:
             Tuple of (query_states_rope, key_states_rope) with RoPE applied
         """
-        # Get cos, sin from the model's rotary_emb module
-        # rotary_emb is at model.model.rotary_emb (shared across all layers)
-        # It expects (hidden_states, position_ids) and returns (cos, sin)
-        # We use key_states as a dummy tensor for dtype/device
-        cos, sin = self.model.model.rotary_emb(key_states, position_ids)
-        
-        # Apply RoPE using HuggingFace's helper function
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, cos, sin
-        )
-        
-        return query_states, key_states
+        rotary_emb = getattr(attn_module, "rotary_emb", None)
+        if rotary_emb is None:
+            rotary_emb = getattr(self.model.model, "rotary_emb", None)
+        if rotary_emb is None:
+            raise RuntimeError("Could not find rotary_emb on attention module or model.")
+
+        cos_sin = None
+        for call in (
+            lambda: rotary_emb(key_states, position_ids),
+            lambda: rotary_emb(key_states, seq_len=kv_seq_len),
+            lambda: rotary_emb(key_states, kv_seq_len),
+        ):
+            try:
+                cos_sin = call()
+                break
+            except TypeError:
+                continue
+        if cos_sin is None:
+            raise RuntimeError("Failed to call rotary_emb with supported signatures.")
+
+        cos, sin = cos_sin
+        try:
+            q, k = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+        except TypeError:
+            q, k = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        return q, k
     
     def prefill(self, prompt: str, seq_id: Optional[int] = None) -> int:
         """
@@ -149,7 +164,8 @@ class PagedAttentionModelWrapper:
         self.sequences[seq_id] = {
             "prompt_tokens": prompt_tokens,
             "generated_tokens": [],
-            "total_tokens": len(prompt_tokens)
+            "total_tokens": len(prompt_tokens),  # number of tokens already cached
+            "next_token_id": None,               # one-token lookahead buffer
         }
         
         print(f"\n[Prefill] Sequence {seq_id}: Processing {len(prompt_tokens)} prompt tokens")
@@ -182,9 +198,10 @@ class PagedAttentionModelWrapper:
                         seq_id, k_token, v_token, token_idx
                     )
         
-        # Check what the first token would be
+        # Get first token from prefill logits
         logits_check = outputs.logits[:, -1, :]
-        first_token_id = torch.argmax(logits_check, dim=-1).item()
+        first_token_id = int(torch.argmax(logits_check, dim=-1).item())
+        self.sequences[seq_id]["next_token_id"] = first_token_id
         first_token_text = self.tokenizer.decode([first_token_id])
         print(f"[Prefill] Sequence {seq_id}: Cached KV for {len(prompt_tokens)} tokens")
         stats = self.paged_attentions[0].get_stats()
@@ -194,128 +211,77 @@ class PagedAttentionModelWrapper:
         return seq_id
     
     def decode_step(self, seq_id: int) -> Optional[int]:
-        """
-        Generate one token using PagedAttention for attention computation.
-        
-        This implementation bypasses HuggingFace's attention and uses PagedAttention
-        directly, making PA truly participate in the compute path.
-        
-        Args:
-            seq_id: Sequence ID
-            
-        Returns:
-            Generated token ID, or None if sequence not found
-        """
+        """Generate one token, using PagedAttention for attention computation."""
         if seq_id not in self.sequences:
             return None
-        
+
         seq_info = self.sequences[seq_id]
-        
-        # Get the last generated token (or last prompt token if no generation yet)
-        if seq_info["generated_tokens"]:
-            last_token_id = seq_info["generated_tokens"][-1]
-        else:
-            last_token_id = seq_info["prompt_tokens"][-1]
-        
-        token_tensor = torch.tensor([[last_token_id]], device=self.device)
-        
+
+        # one-token lookahead:
+        # - emit seq_info['next_token_id'] now (and cache it)
+        # - compute next token id and store back to seq_info['next_token_id']
+        token_to_emit = seq_info.get("next_token_id")
+        if token_to_emit is None:
+            token_to_emit = seq_info["prompt_tokens"][-1]
+
+        token_tensor = torch.tensor([[int(token_to_emit)]], device=self.device)
+        position = int(seq_info["total_tokens"])
+        position_ids = torch.tensor([[position]], device=self.device, dtype=torch.long)
+        kv_seq_len = position + 1
+
         with torch.no_grad():
-            # Get embedding for the current token
-            hidden_states = self.model.model.embed_tokens(token_tensor)
-            
-            # Get position for RoPE (current token position)
-            current_pos = seq_info["total_tokens"]
-            position_ids = torch.tensor([[current_pos]], device=self.device, dtype=torch.long)
-            
-            # Process through each layer manually
+            hidden_states = self.model.model.embed_tokens(token_tensor)  # [1,1,H]
+
             for layer_idx in range(self.num_layers):
                 layer = self.model.model.layers[layer_idx]
-                attention = self._get_attention_layer(layer_idx)
-                
-                # Apply layer norm before attention
-                hidden_states_norm = layer.input_layernorm(hidden_states)
-                
-                # Compute Q, K, V for the current token
-                q_proj = attention.q_proj(hidden_states_norm)
-                k_proj = attention.k_proj(hidden_states_norm)
-                v_proj = attention.v_proj(hidden_states_norm)
-                
-                # Reshape Q, K, V to [B, H, seq_len, D] format for RoPE
-                # Q: [1, 1, num_heads * head_dim] -> [1, num_heads, 1, head_dim]
-                q = q_proj.view(1, 1, self.num_heads, self.head_dim).transpose(1, 2)
-                # K, V: [1, 1, num_kv_heads * head_dim] -> [1, num_kv_heads, 1, head_dim]
-                k = k_proj.view(1, 1, self.num_kv_heads, self.head_dim).transpose(1, 2)
-                v = v_proj.view(1, 1, self.num_kv_heads, self.head_dim).transpose(1, 2)
-                
-                # Apply RoPE using HuggingFace's implementation
-                q_rope, k_rope = self._apply_rope_hf(
-                    q, k, position_ids
-                )
-                # q_rope: [1, num_heads, 1, head_dim]
-                # k_rope: [1, num_kv_heads, 1, head_dim]
-                
-                # Extract the single token's Q, K, V (remove batch and seq dims)
-                q_rope_token = q_rope[0, :, 0, :]  # [num_heads, head_dim]
-                k_rope_token = k_rope[0, :, 0, :]  # [num_kv_heads, head_dim]
-                v_token = v[0, :, 0, :]  # [num_kv_heads, head_dim] (V doesn't need RoPE)
-                
-                # Handle GQA: repeat KV heads to match Q heads for storage/computation
-                # Note: According to a3.md, PA should store KV in Hkv heads and map q heads to kv heads
-                # inside PA kernel. However, our current PA implementation expects [num_heads, head_dim]
-                # for both Q and K/V, so we repeat here for compatibility.
-                # TODO: Refactor PA to handle GQA natively without repetition
+                attn = layer.self_attn
+
+                residual = hidden_states
+                hidden_states = layer.input_layernorm(hidden_states)
+
+                q = attn.q_proj(hidden_states)
+                k = attn.k_proj(hidden_states)
+                v = attn.v_proj(hidden_states)
+
+                q = q.view(1, 1, self.num_heads, self.head_dim).transpose(1, 2)      # [1,Hq,1,D]
+                k = k.view(1, 1, self.num_kv_heads, self.head_dim).transpose(1, 2)   # [1,Hkv,1,D]
+                v = v.view(1, 1, self.num_kv_heads, self.head_dim).transpose(1, 2)   # [1,Hkv,1,D]
+
+                q, k = self._apply_rope(attn, q, k, position_ids, kv_seq_len)
+
+                q_tok = q[0, :, 0, :]   # [Hq,D]
+                k_tok = k[0, :, 0, :]   # [Hkv,D]
+                v_tok = v[0, :, 0, :]   # [Hkv,D]
+
                 if self.num_kv_heads < self.num_heads:
                     repeat_factor = self.num_heads // self.num_kv_heads
-                    k_rope_token = k_rope_token.repeat_interleave(repeat_factor, dim=0)  # [num_heads, head_dim]
-                    v_token = v_token.repeat_interleave(repeat_factor, dim=0)  # [num_heads, head_dim]
-                
-                # Use PagedAttention to compute attention over cached KV
-                # This is the key: PA computes attention, not HF
-                # The cached K/V already have RoPE applied (from prefill)
-                # The new Q has RoPE applied above
-                attn_output_paged = self.paged_attentions[layer_idx].compute_attention(
-                    seq_id, q_rope_token
-                )
-                
-                # Cache K and V for the current token (for next step)
-                # Store with RoPE applied to match prefill behavior
-                token_idx = seq_info["total_tokens"]
-                self.paged_attentions[layer_idx].append_kv(seq_id, k_rope_token, v_token, token_idx)
-                
-                # Reshape for output projection
-                attn_output = attn_output_paged.unsqueeze(0).unsqueeze(0)  # [1, 1, num_heads, head_dim]
-                attn_output = attn_output.transpose(1, 2).contiguous()
-                attn_output = attn_output.view(1, 1, -1)
-                attn_output = attention.o_proj(attn_output)
-                
-                # Residual connection
-                hidden_states = hidden_states + attn_output
-                
-                # Feedforward
-                hidden_states_norm = layer.post_attention_layernorm(hidden_states)
-                mlp_output = layer.mlp(hidden_states_norm)
-                hidden_states = hidden_states + mlp_output
-            
-            # Apply final layer norm
+                    k_tok = k_tok.repeat_interleave(repeat_factor, dim=0)  # [Hq,D]
+                    v_tok = v_tok.repeat_interleave(repeat_factor, dim=0)
+
+                # IMPORTANT: append KV first so attention includes self (causal allows self)
+                self.paged_attentions[layer_idx].append_kv(seq_id, k_tok, v_tok, position)
+
+                # Attention via PagedAttention (no padding; iterates only allocated blocks)
+                ctx = self.paged_attentions[layer_idx].compute_attention(seq_id, q_tok)
+
+                ctx = ctx.reshape(1, 1, self.num_heads * self.head_dim)
+                attn_out = attn.o_proj(ctx)
+                hidden_states = residual + attn_out
+
+                residual = hidden_states
+                hidden_states = layer.post_attention_layernorm(hidden_states)
+                mlp_out = layer.mlp(hidden_states)
+                hidden_states = residual + mlp_out
+
             hidden_states = self.model.model.norm(hidden_states)
-            
-            # Get logits and sample next token
-            logits = self.model.lm_head(hidden_states)
-            
-            # Apply temperature and sample (or use argmax for deterministic)
-            next_token_logits = logits[0, -1, :]
-            next_token_id = torch.argmax(next_token_logits).item()
-            
-            # Debug: print first few tokens
-            if len(seq_info["generated_tokens"]) < 3:
-                token_text = self.tokenizer.decode([next_token_id], skip_special_tokens=False)
-                print(f"  Debug: Generated token {len(seq_info['generated_tokens'])+1}: id={next_token_id}, text='{token_text}'")
-            
-            # Update sequence info
-            seq_info["generated_tokens"].append(next_token_id)
-            seq_info["total_tokens"] += 1
-        
-        return next_token_id
+            logits = self.model.lm_head(hidden_states)  # [1,1,vocab]
+            next_token_id = int(torch.argmax(logits[0, -1, :]).item())
+
+        seq_info["generated_tokens"].append(int(token_to_emit))
+        seq_info["total_tokens"] += 1
+        seq_info["next_token_id"] = next_token_id
+
+        return int(token_to_emit)
     
     def generate(self, prompt: str, max_new_tokens: int = 50) -> str:
         """
