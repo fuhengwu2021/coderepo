@@ -76,13 +76,15 @@ class PagedAttentionModelWrapperV2:
         print(f"Using PagedAttention v2 with {algo_name} (block-streaming)")
         
         # Initialize PagedAttention v2 for each layer
+        # Pass num_kv_heads for GQA support (no physical KV repeat)
         self.paged_attentions = [
             PagedAttentionV2(
                 block_size=block_size,
                 num_heads=self.num_heads,
                 head_dim=self.head_dim,
                 device=device,
-                use_online_softmax=use_online_softmax
+                use_online_softmax=use_online_softmax,
+                num_kv_heads=self.num_kv_heads  # Pass num_kv_heads for GQA
             )
             for _ in range(self.num_layers)
         ]
@@ -192,15 +194,10 @@ class PagedAttentionModelWrapperV2:
                 v_cache = v[0]  # [num_kv_heads, seq_len, head_dim]
                 
                 # Store each token's K/V in PagedAttention blocks
+                # Store with num_kv_heads (no physical repeat - GQA handled in compute_attention via reshape+broadcast)
                 for token_idx in range(k_cache.shape[1]):  # seq_len
                     k_token = k_cache[:, token_idx, :]  # [num_kv_heads, head_dim]
                     v_token = v_cache[:, token_idx, :]  # [num_kv_heads, head_dim]
-                    
-                    # Handle GQA: repeat KV heads to match Q heads
-                    if self.num_kv_heads < self.num_heads:
-                        repeat_factor = self.num_heads // self.num_kv_heads
-                        k_token = k_token.repeat_interleave(repeat_factor, dim=0)  # [num_heads, head_dim]
-                        v_token = v_token.repeat_interleave(repeat_factor, dim=0)  # [num_heads, head_dim]
                     
                     self.paged_attentions[layer_idx].append_kv(
                         seq_id, k_token, v_token, token_idx
@@ -261,12 +258,8 @@ class PagedAttentionModelWrapperV2:
                 k_tok = k[0, :, 0, :]   # [Hkv,D]
                 v_tok = v[0, :, 0, :]   # [Hkv,D]
 
-                if self.num_kv_heads < self.num_heads:
-                    repeat_factor = self.num_heads // self.num_kv_heads
-                    k_tok = k_tok.repeat_interleave(repeat_factor, dim=0)  # [Hq,D]
-                    v_tok = v_tok.repeat_interleave(repeat_factor, dim=0)
-
                 # IMPORTANT: append KV first so attention includes self (causal allows self)
+                # Store with num_kv_heads (no physical repeat - GQA handled in compute_attention via reshape+broadcast)
                 self.paged_attentions[layer_idx].append_kv(seq_id, k_tok, v_tok, position)
 
                 # Attention via PagedAttention v2 (online softmax, block-streaming, no concatenation)
