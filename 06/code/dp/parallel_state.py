@@ -70,6 +70,18 @@ def initialize_data_parallel(data_parallel_size: int, backend: str = "nccl"):
     world_size = dist.get_world_size()
     rank = dist.get_rank()
     
+    # Handle single-process case gracefully
+    if world_size == 1:
+        if data_parallel_size > 1:
+            # Can't create a group larger than world_size, just use world_size
+            data_parallel_size = 1
+        _dp_group = DataParallelGroup()
+        _dp_group.rank_in_group = 0
+        _dp_group.world_size = 1
+        _dp_group.ranks = [0]
+        _dp_group.group = None  # No group needed for single process
+        return _dp_group
+    
     if data_parallel_size > world_size:
         raise ValueError(
             f"data_parallel_size ({data_parallel_size}) > world_size ({world_size})"

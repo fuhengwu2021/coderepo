@@ -107,15 +107,20 @@ def demo_data_parallel_training(device: torch.device, dp_size: int):
     # In data parallelism, we average gradients from all ranks
     for param in model.parameters():
         if param.grad is not None:
-            dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-            param.grad.data /= dp_size  # Average the gradients
+            if dp_size > 1:
+                dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+                param.grad.data /= dp_size  # Average the gradients
+            # For single process, no synchronization needed (gradient is already correct)
     
     # Update parameters
     optimizer.step()
     
     print(f"Rank {dp_rank}:")
     print(f"  Loss: {loss.item():.4f}")
-    print(f"  Gradients synchronized across {dp_size} ranks")
+    if dp_size > 1:
+        print(f"  Gradients synchronized across {dp_size} ranks")
+    else:
+        print(f"  Single process mode: no gradient synchronization needed")
     print(f"  Parameters updated with averaged gradients")
 
 
@@ -214,7 +219,7 @@ def main():
         initialize_data_parallel(dp_size, backend=backend)
         actual_dp_size = dp_size
     else:
-        print(f"Warning: world_size ({world_size}) < dp_size ({dp_size}), using world_size")
+        print(f"Note: world_size ({world_size}) < dp_size ({dp_size}), using world_size for debugging")
         backend = "gloo" if use_cpu else "nccl"
         initialize_data_parallel(world_size, backend=backend)
         actual_dp_size = world_size
@@ -230,24 +235,30 @@ def main():
         if use_cpu and torch.cuda.is_available():
             print(f"Note: Using CPU mode (GPUs available: {torch.cuda.device_count()})")
     
-    # Run demos
+    # Run demos (allow single process for debugging)
     if actual_dp_size > 1:
         demo_data_parallel_inference(device, actual_dp_size)
         demo_data_parallel_training(device, actual_dp_size)
         demo_transformer_data_parallel(device, actual_dp_size)
         demo_throughput_benefits(device, actual_dp_size)
     else:
-        print("\nWarning: Need at least 2 processes for data parallelism demo")
-        print("Run with: torchrun --nproc_per_node=2 demo.py")
+        print("\nNote: Running in single-process mode (useful for debugging)")
+        print("For full data parallelism demo, run with: torchrun --nproc_per_node=2 demo.py")
+        print("\nRunning demos in single-process mode...")
+        demo_data_parallel_inference(device, actual_dp_size)
+        demo_data_parallel_training(device, actual_dp_size)
+        demo_transformer_data_parallel(device, actual_dp_size)
+        demo_throughput_benefits(device, actual_dp_size)
     
     # Cleanup
-    dist.barrier()
-    if rank == 0:
-        print("\n" + "="*60)
-        print("Demo completed!")
-        print("="*60)
-    
-    dist.destroy_process_group()
+    if dist.is_initialized():
+        dist.barrier()
+        if rank == 0:
+            print("\n" + "="*60)
+            print("Demo completed!")
+            print("="*60)
+        
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

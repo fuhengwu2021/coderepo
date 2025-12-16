@@ -115,11 +115,18 @@ def init_distributed(use_cpu=False):
         torch.cuda.set_device(local_rank)
         device = torch.device(f'cuda:{local_rank}')
     
-    if world_size > 1:
-        backend = 'gloo' if use_cpu else 'nccl'
+    # Initialize process group even for world_size == 1 to allow distributed APIs to work
+    # This is necessary when code uses dist.get_rank(), dist.is_initialized(), etc.
+    if not dist.is_initialized():
+        # For world_size == 1, use 'gloo' backend (nccl requires at least 2 processes)
+        if world_size == 1:
+            backend = 'gloo'
+        else:
+            backend = 'gloo' if use_cpu else 'nccl'
+        
         # Specify device_id for NCCL to avoid warnings about guessing device ID
         init_kwargs = {'backend': backend}
-        if not use_cpu and torch.cuda.is_available():
+        if not use_cpu and torch.cuda.is_available() and world_size > 1:
             init_kwargs['device_id'] = local_rank
         
         # Suppress NCCL warning about unbatched P2P ops for demos

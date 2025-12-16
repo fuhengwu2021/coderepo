@@ -3,6 +3,7 @@ Simple model for Data Parallelism demo
 """
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class SimpleModel(nn.Module):
@@ -68,7 +69,7 @@ class TransformerBlock(nn.Module):
         # MLP
         residual = x
         x = self.mlp_norm(x)
-        gate = torch.silu(self.gate_proj(x))
+        gate = F.silu(self.gate_proj(x))
         up = self.up_proj(x)
         mlp_output = self.down_proj(gate * up)
         x = residual + mlp_output

@@ -4,6 +4,7 @@ Splits a model across multiple pipeline stages
 """
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import List, Optional
 
 
@@ -69,7 +70,7 @@ class TransformerBlock(nn.Module):
         # MLP
         residual = x
         x = self.mlp_norm(x)
-        gate = torch.silu(self.gate_proj(x))
+        gate = F.silu(self.gate_proj(x))
         up = self.up_proj(x)
         mlp_output = self.down_proj(gate * up)
         x = residual + mlp_output

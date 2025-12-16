@@ -1,4 +1,5 @@
 """pip install einops flash_attn accelerate
+use conda env codellm
 """
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
