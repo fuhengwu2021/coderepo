@@ -91,7 +91,9 @@ def demo_pipeline_forward(device: torch.device, pp_size: int):
             dist.recv(x, src=prev_rank)
             print(f"  Received input shape: {x.shape}")
         else:
-            raise RuntimeError("Non-first stage must have previous rank")
+            # Single-process mode: no previous rank, skip receive
+            x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+            print(f"  Single-process mode: created input (no previous stage)")
     
     # Forward through this stage
     with torch.no_grad():
@@ -106,6 +108,8 @@ def demo_pipeline_forward(device: torch.device, pp_size: int):
     else:
         # Last stage: output is final result
         print(f"  Final output shape: {output.shape}")
+        if is_first_stage():
+            print(f"  Single-process mode: stage is both first and last")
         print(f"  Pipeline forward pass completed!")
 
 
@@ -150,6 +154,9 @@ def demo_pipeline_microbatches(device: torch.device, pp_size: int):
                 if prev_rank is not None:
                     x = torch.empty(batch_size, seq_len, hidden_size, device=device)
                     dist.recv(x, src=prev_rank)
+                else:
+                    # Single-process mode: create input
+                    x = torch.randn(batch_size, seq_len, hidden_size, device=device)
             
             # Forward through this stage
             output = stage(x)
@@ -164,7 +171,8 @@ def demo_pipeline_microbatches(device: torch.device, pp_size: int):
                 if microbatch_idx == 0:
                     print(f"  Microbatch {microbatch_idx}: output shape {output.shape}")
     
-    dist.barrier()
+    if dist.is_initialized():
+        dist.barrier()
     if is_last_stage():
         print(f"  All {num_microbatches} microbatches processed!")
 
@@ -255,7 +263,7 @@ def main():
         initialize_pipeline_parallel(pp_size, backend=backend)
         actual_pp_size = pp_size
     else:
-        print(f"Warning: world_size ({world_size}) < pp_size ({pp_size}), using world_size")
+        print(f"Note: world_size ({world_size}) < pp_size ({pp_size}), using world_size for debugging")
         backend = "gloo" if use_cpu else "nccl"
         initialize_pipeline_parallel(world_size, backend=backend)
         actual_pp_size = world_size
@@ -271,7 +279,7 @@ def main():
         if use_cpu and torch.cuda.is_available():
             print(f"Note: Using CPU mode (GPUs available: {torch.cuda.device_count()})")
     
-    # Run demos
+    # Run demos (allow single process for debugging)
     if actual_pp_size > 1:
         demo_pipeline_forward(device, actual_pp_size)
         dist.barrier()  # Synchronize between demos
@@ -281,17 +289,28 @@ def main():
         dist.barrier()
         demo_pipeline_efficiency(device, actual_pp_size)
     else:
-        print("\nWarning: Need at least 2 processes for pipeline parallelism demo")
-        print("Run with: torchrun --nproc_per_node=2 demo.py")
+        print("\nNote: Running in single-process mode (useful for debugging)")
+        print("For full pipeline parallelism demo, run with: torchrun --nproc_per_node=2 demo.py")
+        print("\nRunning demos in single-process mode...")
+        # In single-process mode, the stage is both first and last
+        demo_pipeline_forward(device, actual_pp_size)
+        if dist.is_initialized():
+            dist.barrier()
+        demo_memory_benefits(device, actual_pp_size)
+        if dist.is_initialized():
+            dist.barrier()
+        demo_pipeline_efficiency(device, actual_pp_size)
+        # Skip microbatches demo in single-process mode (requires multiple stages)
     
     # Cleanup
-    dist.barrier()
-    if rank == 0:
-        print("\n" + "="*60)
-        print("Demo completed!")
-        print("="*60)
-    
-    dist.destroy_process_group()
+    if dist.is_initialized():
+        dist.barrier()
+        if rank == 0:
+            print("\n" + "="*60)
+            print("Demo completed!")
+            print("="*60)
+        
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

@@ -41,12 +41,12 @@ class PipelineParallelGroup:
     
     def send(self, tensor: torch.Tensor, dst: int):
         """Send tensor to next stage"""
-        if self.next_rank is not None:
+        if self.next_rank is not None and self.group is not None:
             dist.send(tensor, dst=dst, group=self.group)
     
     def recv(self, shape: tuple, dtype: torch.dtype, device: torch.device, src: int) -> torch.Tensor:
         """Receive tensor from previous stage"""
-        if self.prev_rank is not None:
+        if self.prev_rank is not None and self.group is not None:
             tensor = torch.empty(shape, dtype=dtype, device=device)
             dist.recv(tensor, src=src, group=self.group)
             return tensor
@@ -81,6 +81,20 @@ def initialize_pipeline_parallel(pipeline_parallel_size: int, backend: str = "nc
     
     world_size = dist.get_world_size()
     rank = dist.get_rank()
+    
+    # Handle single-process case gracefully
+    if world_size == 1:
+        if pipeline_parallel_size > 1:
+            # Can't create a group larger than world_size, just use world_size
+            pipeline_parallel_size = 1
+        _pp_group = PipelineParallelGroup()
+        _pp_group.rank_in_group = 0
+        _pp_group.world_size = 1
+        _pp_group.ranks = [0]
+        _pp_group.prev_rank = None  # First and only stage
+        _pp_group.next_rank = None  # Last and only stage
+        _pp_group.group = None  # No group needed for single process
+        return _pp_group
     
     if pipeline_parallel_size > world_size:
         raise ValueError(

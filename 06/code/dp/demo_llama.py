@@ -4,9 +4,38 @@ Demonstrates data parallel inference with real Llama-3.2-1B-Instruct model
 
 This demo shows how each DP replica loads a full model copy and processes
 independent request streams, similar to vLLM's data parallelism.
+
+Run with:
+    torchrun --nproc_per_node=2 demo_llama.py
 """
+import os
+import sys
 import torch
 import torch.distributed as dist
+
+# Import shared distributed utilities from mdaisy
+try:
+    from mdaisy import init_distributed
+except ImportError:
+    # Try to add the shared directory to path
+    shared_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+        "resources", "coderepo", "shared"
+    )
+    if os.path.exists(shared_path):
+        sys.path.insert(0, shared_path)
+        from mdaisy import init_distributed
+    else:
+        raise ImportError(
+            "Could not import mdaisy. Please install it or ensure resources/coderepo/shared is available.\n"
+            "You can install it with: pip install -e resources/coderepo/shared"
+        )
+
+from parallel_state import (
+    initialize_data_parallel,
+    get_data_parallel_rank,
+    get_data_parallel_world_size,
+)
 
 # For Llama demo
 try:
@@ -30,7 +59,8 @@ def demo_llama_data_parallel(device: torch.device, dp_size: int):
     print("Demo 4: Llama-3.2-1B-Instruct Data Parallel Inference")
     print("="*60)
     
-    dp_rank = dist.get_rank()
+    # Use DP rank instead of global rank for clarity (matches vLLM semantics)
+    dp_rank = get_data_parallel_rank()
     model_name = "meta-llama/Llama-3.2-1B-Instruct"
     
     if dp_rank == 0:
@@ -47,7 +77,7 @@ def demo_llama_data_parallel(device: torch.device, dp_size: int):
         # Load model with appropriate dtype and device
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
+            dtype=torch.float16 if device.type == "cuda" else torch.float32,
             device_map={"": device},
             low_cpu_mem_usage=True,
         )
@@ -128,3 +158,64 @@ def demo_llama_data_parallel(device: torch.device, dp_size: int):
         if dp_rank == 0:
             print(f"\n  System-wide: {dp_size} replicas processing requests concurrently")
             print(f"    Throughput scales with number of DP replicas")
+
+
+def main():
+    """Main demo function"""
+    import argparse
+    parser = argparse.ArgumentParser(description="Llama Data Parallelism Demo")
+    parser.add_argument(
+        "--force-cpu",
+        action="store_true",
+        help="Force CPU usage even if GPUs are available"
+    )
+    args = parser.parse_args()
+    
+    # Use shared mdaisy utility for distributed initialization
+    rank, world_size, device, local_rank = init_distributed(use_cpu=args.force_cpu)
+    
+    # Determine if using CPU
+    use_cpu = device.type == "cpu"
+    
+    # Initialize data parallelism
+    # Note: DP group exists for uniformity with TP/PP; inference does not require collectives.
+    # In vLLM-style DP, each replica processes independent requests with no cross-rank communication.
+    dp_size = 2  # Use 2 processes for data parallelism
+    if world_size >= dp_size:
+        # Use appropriate backend based on device
+        backend = "gloo" if use_cpu else "nccl"
+        initialize_data_parallel(dp_size, backend=backend)
+        actual_dp_size = dp_size
+    else:
+        print(f"Note: world_size ({world_size}) < dp_size ({dp_size}), using world_size for debugging")
+        backend = "gloo" if use_cpu else "nccl"
+        initialize_data_parallel(world_size, backend=backend)
+        actual_dp_size = world_size
+    
+    if rank == 0:
+        print("\n" + "="*60)
+        print("Llama Data Parallelism Demo")
+        print("="*60)
+        print(f"World size: {world_size}")
+        print(f"Data parallel size: {actual_dp_size}")
+        print(f"Device: {device}")
+        print(f"Backend: {'gloo (CPU)' if use_cpu else 'nccl (GPU)'}")
+        if use_cpu and torch.cuda.is_available():
+            print(f"Note: Using CPU mode (GPUs available: {torch.cuda.device_count()})")
+    
+    # Run demo
+    demo_llama_data_parallel(device, actual_dp_size)
+    
+    # Cleanup
+    if dist.is_initialized():
+        dist.barrier()
+        if rank == 0:
+            print("\n" + "="*60)
+            print("Demo completed!")
+            print("="*60)
+        
+        dist.destroy_process_group()
+
+
+if __name__ == "__main__":
+    main()

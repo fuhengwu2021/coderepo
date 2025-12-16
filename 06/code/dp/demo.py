@@ -30,9 +30,12 @@ except ImportError:
             "You can install it with: pip install -e resources/coderepo/shared"
         )
 
-from parallel_state import initialize_data_parallel
+from parallel_state import (
+    initialize_data_parallel,
+    get_data_parallel_rank,
+    get_data_parallel_world_size,
+)
 from model import SimpleModel, SimpleTransformer
-from demo_llama import demo_llama_data_parallel
 
 
 def demo_data_parallel_inference(device: torch.device, dp_size: int):
@@ -45,7 +48,8 @@ def demo_data_parallel_inference(device: torch.device, dp_size: int):
     model = SimpleModel(input_size=128, hidden_size=256, output_size=10).to(device)
     model.eval()
     
-    dp_rank = dist.get_rank()
+    # Use DP rank instead of global rank for clarity (matches vLLM semantics)
+    dp_rank = get_data_parallel_rank()
     
     # Simulate independent request streams on each DP rank
     # In vLLM, each DP replica processes different requests concurrently
@@ -96,7 +100,8 @@ def demo_transformer_data_parallel(device: torch.device, dp_size: int):
     ).to(device)
     model.eval()
     
-    dp_rank = dist.get_rank()
+    # Use DP rank instead of global rank for clarity (matches vLLM semantics)
+    dp_rank = get_data_parallel_rank()
     
     # Simulate processing different request streams on each rank
     # In vLLM, each DP replica handles independent request batches
@@ -144,7 +149,8 @@ def demo_throughput_benefits(device: torch.device, dp_size: int):
     
     elapsed_time = time.time() - start_time
     
-    dp_rank = dist.get_rank()
+    # Use DP rank instead of global rank for clarity (matches vLLM semantics)
+    dp_rank = get_data_parallel_rank()
     print(f"Rank {dp_rank}:")
     print(f"  Processed {num_requests} independent requests")
     print(f"  Time per request: {elapsed_time / num_requests * 1000:.2f} ms")
@@ -171,6 +177,8 @@ def main():
     use_cpu = device.type == "cpu"
     
     # Initialize data parallelism
+    # Note: DP group exists for uniformity with TP/PP; inference does not require collectives.
+    # In vLLM-style DP, each replica processes independent requests with no cross-rank communication.
     dp_size = 2  # Use 2 processes for data parallelism
     if world_size >= dp_size:
         # Use appropriate backend based on device
@@ -199,7 +207,6 @@ def main():
         demo_data_parallel_inference(device, actual_dp_size)
         demo_transformer_data_parallel(device, actual_dp_size)
         demo_throughput_benefits(device, actual_dp_size)
-        demo_llama_data_parallel(device, actual_dp_size)
     else:
         print("\nNote: Running in single-process mode (useful for debugging)")
         print("For full data parallelism demo, run with: torchrun --nproc_per_node=2 demo.py")
@@ -207,7 +214,6 @@ def main():
         demo_data_parallel_inference(device, actual_dp_size)
         demo_transformer_data_parallel(device, actual_dp_size)
         demo_throughput_benefits(device, actual_dp_size)
-        demo_llama_data_parallel(device, actual_dp_size)
     
     # Cleanup
     if dist.is_initialized():
