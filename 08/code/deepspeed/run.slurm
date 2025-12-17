@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=100G
 #SBATCH --time=2:00:00
-#SBATCH --output=logs/ds_zero3_%j_%N.out
-#SBATCH --error=logs/ds_zero3_%j_%N.err
+#SBATCH --output=logs/train_%j_%N.out
+#SBATCH --error=logs/train_%j_%N.err
 
 # This script runs DeepSpeed ZeRO-3 with CPU offload training
 # Multi-Node Single-GPU Setup: Multiple nodes, each with 1 GPU
