@@ -38,6 +38,7 @@ class HybridTPDecoderLayer(nn.Module):
         self.device = device
         
         # Use HF's layer norm (not sharded)
+        # Note: These will be moved to device in HybridTPModel.__init__
         self.input_layernorm = hf_layer.input_layernorm
         self.post_attention_layernorm = hf_layer.post_attention_layernorm
         
@@ -179,8 +180,8 @@ class HybridTPModel(nn.Module):
         self.lm_head = hf_model.lm_head
         self.lm_head = self.lm_head.to(device_obj)
         
-        # Create TP wrapper for weight loading
-        tp_wrapper = TPModelWrapper(model_name=model_name, device=device, dtype=dtype)
+        # Create TP wrapper for weight loading (use device_obj as string for compatibility)
+        tp_wrapper = TPModelWrapper(model_name=model_name, device=str(device_obj), dtype=dtype)
         
         # Create hybrid decoder layers
         self.layers = nn.ModuleList()
@@ -199,12 +200,14 @@ class HybridTPModel(nn.Module):
                 device=device_obj,
             )
             # Ensure all components are on the correct device
-            # LayerNorm needs to be moved explicitly
+            # LayerNorm needs to be moved explicitly (they come from HF model which is on CPU)
             hybrid_layer.input_layernorm = hybrid_layer.input_layernorm.to(device_obj)
             hybrid_layer.post_attention_layernorm = hybrid_layer.post_attention_layernorm.to(device_obj)
             # RoPE also needs to be on device if it exists
             if hybrid_layer.rotary_emb is not None:
                 hybrid_layer.rotary_emb = hybrid_layer.rotary_emb.to(device_obj)
+            # Move the entire layer to device to ensure all submodules are on device
+            hybrid_layer = hybrid_layer.to(device_obj)
             self.layers.append(hybrid_layer)
         
         # Clean up HF model (we've extracted what we need)
