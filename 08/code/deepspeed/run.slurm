@@ -27,7 +27,25 @@ if [ -f ~/miniconda3/etc/profile.d/conda.sh ]; then
 elif [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
     source ~/anaconda3/etc/profile.d/conda.sh
 fi
-conda activate research
+
+# Activate conda environment and get Python path
+conda activate research || {
+    echo "ERROR: Failed to activate conda environment 'research'"
+    echo "Available environments:"
+    conda env list
+    exit 1
+}
+
+# Get Python path from activated environment
+PYTHON_PATH=$(which python)
+if [ -z "$PYTHON_PATH" ]; then
+    echo "ERROR: Python not found in conda environment"
+    exit 1
+fi
+
+echo "Using Python: $PYTHON_PATH"
+echo "Python version: $($PYTHON_PATH --version)"
+echo ""
 
 # Get the directory where this script is located
 SCRIPT_DIR="${SLURM_SUBMIT_DIR:-$(dirname "$(readlink -f "$0")")}"
@@ -81,8 +99,11 @@ echo ""
 
 # Check DeepSpeed installation
 echo "Checking DeepSpeed installation:"
-python -c "import deepspeed; print(f'DeepSpeed version: {deepspeed.__version__}')" || {
-    echo "ERROR: DeepSpeed not installed. Install with: pip install deepspeed"
+echo "Python path: $(which python)"
+$PYTHON_PATH -c "import deepspeed; print(f'DeepSpeed version: {deepspeed.__version__}')" || {
+    echo "ERROR: DeepSpeed not installed in conda environment 'research'"
+    echo "Install with: conda activate research && pip install deepspeed"
+    echo "Or check if you're using the correct conda environment"
     exit 1
 }
 echo ""
@@ -115,17 +136,48 @@ echo ""
 # DeepSpeed automatically reads SLURM_PROCID and other SLURM env vars
 # Do NOT use torchrun - DeepSpeed handles distributed setup internally
 # --num_gpus should be per node (1 in this case), not total
+
+# Get deepspeed path from the activated environment
+DEEPSPEED_PATH=$(which deepspeed)
+if [ -z "$DEEPSPEED_PATH" ]; then
+    echo "ERROR: deepspeed command not found in conda environment"
+    exit 1
+fi
+
+echo "Using DeepSpeed: $DEEPSPEED_PATH"
+echo ""
+
+# Create a wrapper command that activates conda on each compute node
+# This ensures conda environment is available when srun launches processes
+CONDA_INIT_CMD=""
+if [ -f ~/miniconda3/etc/profile.d/conda.sh ]; then
+    CONDA_INIT_CMD="source ~/miniconda3/etc/profile.d/conda.sh"
+elif [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
+    CONDA_INIT_CMD="source ~/anaconda3/etc/profile.d/conda.sh"
+fi
+
+# Use bash -c to activate conda and run deepspeed on each node
+# Add debugging to verify conda activation on each node
 srun --chdir="$SCRIPT_DIR" --label \
-    deepspeed \
-    --num_gpus=$SLURM_NTASKS_PER_NODE \
-    --num_nodes=$SLURM_JOB_NUM_NODES \
-    --master_addr=$MASTER_ADDR \
-    --master_port=$MASTER_PORT \
-    "$TRAIN_SCRIPT" \
-    --deepspeed \
-    --deepspeed-config "$CONFIG_FILE" \
-    --model-name "Qwen/Qwen2.5-1.5B-Instruct" \
-    --steps 10
+    bash -c "
+        echo '[Node \$(hostname)] Activating conda environment...'
+        $CONDA_INIT_CMD || echo '[Node \$(hostname)] WARNING: Conda init failed, trying alternative paths...'
+        conda activate research || {
+            echo '[Node \$(hostname)] ERROR: Failed to activate conda environment research'
+            echo '[Node \$(hostname)] Available environments:'
+            conda env list || echo '[Node \$(hostname)] Conda command not found'
+            exit 1
+        }
+        echo '[Node \$(hostname)] Conda environment activated'
+        echo '[Node \$(hostname)] Python path: \$(which python)'
+        echo '[Node \$(hostname)] DeepSpeed path: \$(which deepspeed)'
+        python -c 'import deepspeed; print(f\"[Node \$(hostname)] DeepSpeed version: {deepspeed.__version__}\")' || {
+            echo '[Node \$(hostname)] ERROR: DeepSpeed import failed'
+            exit 1
+        }
+        echo '[Node \$(hostname)] Starting DeepSpeed training...'
+        deepspeed --num_gpus=$SLURM_NTASKS_PER_NODE --num_nodes=$SLURM_JOB_NUM_NODES --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \"$TRAIN_SCRIPT\" --deepspeed --deepspeed-config \"$CONFIG_FILE\" --model-name \"Qwen/Qwen2.5-1.5B-Instruct\" --steps 10
+    "
 
 echo ""
 echo "=========================================="
