@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=ds-zero3-offload
-#SBATCH --nodes=1                    # Single node
-#SBATCH --gres=gpu:2                # 2 GPUs (adjust as needed: 2, 4, 8, etc.)
-#SBATCH --ntasks-per-node=2         # 2 tasks (one per GPU)
+#SBATCH --nodes=2                    # 2 nodes (one GPU per node)
+#SBATCH --gres=gpu:1                # 1 GPU per node
+#SBATCH --ntasks-per-node=1         # 1 task per node
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=100G
 #SBATCH --time=2:00:00
@@ -10,7 +10,7 @@
 #SBATCH --error=logs/ds_zero3_%j_%N.err
 
 # This script runs DeepSpeed ZeRO-3 with CPU offload training
-# Single-Node Multi-GPU Setup: 1 node with multiple GPUs
+# Multi-Node Single-GPU Setup: Multiple nodes, each with 1 GPU
 #
 # Usage:
 #   mkdir -p logs
@@ -48,8 +48,8 @@ echo "Logs directory: $SCRIPT_DIR/logs"
 echo ""
 
 # --------- Required distributed environment variables ---------
-# For single-node multi-GPU, use localhost
-export MASTER_ADDR=127.0.0.1
+# Get master node address from SLURM (first node in the list)
+export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_PORT=29500
 export WORLD_SIZE=$SLURM_NTASKS
 
@@ -114,9 +114,10 @@ echo ""
 # Use srun with deepspeed command
 # DeepSpeed automatically reads SLURM_PROCID and other SLURM env vars
 # Do NOT use torchrun - DeepSpeed handles distributed setup internally
+# --num_gpus should be per node (1 in this case), not total
 srun --chdir="$SCRIPT_DIR" --label \
     deepspeed \
-    --num_gpus=$SLURM_NTASKS \
+    --num_gpus=$SLURM_NTASKS_PER_NODE \
     --num_nodes=$SLURM_JOB_NUM_NODES \
     --master_addr=$MASTER_ADDR \
     --master_port=$MASTER_PORT \

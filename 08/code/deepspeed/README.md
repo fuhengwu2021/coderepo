@@ -1,6 +1,6 @@
 # DeepSpeed ZeRO-3 with CPU Offload
 
-This directory contains a complete DeepSpeed ZeRO-3 with CPU offload implementation for Single-Node Multi-GPU setup.
+This directory contains a complete DeepSpeed ZeRO-3 with CPU offload implementation for Multi-Node Single-GPU setup (one GPU per node).
 
 ## Overview
 
@@ -13,7 +13,7 @@ This implementation demonstrates DeepSpeed's unique capability to train models l
 
 1. **`train.py`** - Training script using HuggingFace models with DeepSpeed
 2. **`ds_zero3_offload.json`** - DeepSpeed configuration for ZeRO-3 with CPU offload
-3. **`run.slurm`** - SLURM batch script for single-node multi-GPU setup
+3. **`run.slurm`** - SLURM batch script for multi-node single-GPU setup
 
 ## Key Features
 
@@ -33,17 +33,18 @@ This implementation demonstrates DeepSpeed's unique capability to train models l
 
 ## Configuration
 
-### Single-Node Multi-GPU Setup
+### Multi-Node Single-GPU Setup
 
 The `run.slurm` script is configured for:
-- **1 node** (`--nodes=1`)
-- **2 GPUs** (`--gres=gpu:2`) - adjust as needed
-- **2 tasks** (`--ntasks-per-node=2`) - one per GPU
+- **2 nodes** (`--nodes=2`) - each with 1 GPU
+- **1 GPU per node** (`--gres=gpu:1`)
+- **1 task per node** (`--ntasks-per-node=1`)
 
-To use more GPUs, modify:
+To use more GPUs, add more nodes:
 ```bash
-#SBATCH --gres=gpu:4        # 4 GPUs
-#SBATCH --ntasks-per-node=4 # 4 tasks
+#SBATCH --nodes=4           # 4 nodes (4 GPUs total)
+#SBATCH --gres=gpu:1        # 1 GPU per node
+#SBATCH --ntasks-per-node=1 # 1 task per node
 ```
 
 ### DeepSpeed Configuration
