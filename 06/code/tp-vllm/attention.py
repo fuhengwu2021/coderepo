@@ -211,7 +211,9 @@ class TensorParallelAttention(nn.Module):
             import warnings
             warnings.warn("NaN detected in attention scores before softmax!")
         
-        attn_weights = F.softmax(scores, dim=-1)
+        # CRITICAL: Use float32 for softmax computation for numerical stability (matches HF eager_attention_forward)
+        # This prevents precision loss when scores have large values
+        attn_weights = F.softmax(scores, dim=-1, dtype=torch.float32).to(scores.dtype)
         
         # Debug: Check for NaN after softmax
         if get_tensor_model_parallel_rank() == 0 and torch.isnan(attn_weights).any():
