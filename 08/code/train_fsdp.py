@@ -277,20 +277,22 @@ def main():
     if rank == 0:
         print(f'  DataLoader num_workers: {num_workers} (auto-detected from available CPUs)')
     
-    # Create model
+    # Create model and move to device before wrapping with FSDP
+    # This avoids the warning about CPU initialization and improves performance
     model = MyLargeModel(input_dim=args.input_dim, hidden_dim=args.hidden_dim, num_layers=args.num_layers)
+    model = model.to(device)
     
     if is_distributed:
-        # Wrap with FSDP
+        # Wrap with FSDP - model is already on GPU, so pass device_id for proper sharding
+        # device_id should be the device index (0 after CUDA_VISIBLE_DEVICES remapping)
+        device_id = device.index if device.index is not None else 0
         model = FSDP(
             model,
             auto_wrap_policy=size_based_auto_wrap_policy,
             cpu_offload=CPUOffload(offload_params=False),  # Set to True to offload to CPU
+            device_id=device_id,  # Specify device_id to avoid CPU initialization warning
         )
-        model = model.to(device)
-    else:
-        # Single GPU mode
-        model = model.to(device)
+    # Single GPU mode - model already moved to device above
     
     # Create dataset and dataloader
     dataset = SimpleDataset(size=args.dataset_size, input_dim=args.input_dim)
