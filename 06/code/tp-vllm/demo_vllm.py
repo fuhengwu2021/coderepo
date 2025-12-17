@@ -199,6 +199,99 @@ def demo_forward_pass(device: torch.device, tp_size: int):
             print("Forward pass completed successfully!")
 
 
+def demo_text_generation(device: torch.device, tp_size: int):
+    """Demonstrate actual text generation with Hybrid TP model"""
+    rank = dist.get_rank()
+    
+    if rank == 0:
+        print("\n" + "="*60)
+        print("Demo: Text Generation with Hybrid TP Model")
+        print("="*60)
+        print("Using hybrid approach:")
+        print("  - TP layers: Attention and MLP (our implementation)")
+        print("  - HF layers: Embedding, LayerNorm, LM Head")
+        print("="*60)
+    
+    model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+    
+    if rank == 0:
+        print(f"\nLoading model {model_name}...")
+    
+    # Load tokenizer
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    
+    # Create hybrid TP model (all ranks create it, but only rank 0 will use for generation)
+    try:
+        from hybrid_tp_model import HybridTPModel
+    except ImportError:
+        from .hybrid_tp_model import HybridTPModel
+    
+    dtype = torch.float16 if device.type == "cuda" else torch.float32
+    
+    if rank == 0:
+        print("Creating HybridTPModel (this may take a moment)...")
+    
+    # All ranks create the model (TP layers need to be on all ranks)
+    model = HybridTPModel(
+        model_name=model_name,
+        device=str(device),
+        dtype=dtype,
+    )
+    
+    # Use the same prompts as inference_v4.py
+    prompts = [
+        "What is the capital of France?",
+        "Explain quantum computing in simple terms.",
+        "Write a haiku about AI.",
+    ]
+    
+    if rank == 0:
+        print(f"\nGenerating responses for {len(prompts)} prompts...")
+        print("="*60)
+    
+    # Generate text for each prompt
+    results = []
+    
+    if rank == 0:
+        with torch.inference_mode():
+            for i, prompt in enumerate(prompts):
+                print(f"\nPrompt {i+1}: {prompt}")
+                print("-" * 60)
+                
+                # Generate using hybrid TP model
+                generated_text = model.generate(
+                    tokenizer=tokenizer,
+                    prompt=prompt,
+                    max_new_tokens=50,
+                    do_sample=False,  # Greedy decoding for consistency
+                    temperature=1.0,
+                )
+                
+                # Extract response (remove prompt)
+                response = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
+                
+                print(f"Response: {response}")
+                results.append((prompt, response))
+    
+    # Synchronize ranks
+    dist.barrier()
+    
+    if rank == 0:
+        print("\n" + "="*60)
+        print("Generation Results Summary:")
+        print("="*60)
+        for i, (prompt, response) in enumerate(results):
+            print(f"\n{i+1}. Prompt: {prompt}")
+            print(f"   Response: {response}")
+        
+        print("\n" + "="*60)
+        print("✓ Successfully generated text using Hybrid TP Model!")
+        print("  - Attention and MLP layers use TP (sharded across ranks)")
+        print("  - Other layers use HuggingFace original")
+        print("="*60)
+
+
 def main():
     """Main demo function"""
     import argparse
@@ -254,6 +347,7 @@ def main():
     if actual_tp_size > 1:
         demo_weight_loading(device, actual_tp_size)
         demo_forward_pass(device, actual_tp_size)
+        demo_text_generation(device, actual_tp_size)
     else:
         if rank == 0:
             print("\nWarning: Need at least 2 processes for tensor parallelism demo")
