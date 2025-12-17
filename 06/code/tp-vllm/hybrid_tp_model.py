@@ -129,19 +129,25 @@ class HybridTPModel(nn.Module):
         dtype: Optional[torch.dtype] = None,
     ):
         super().__init__()
-        self.device = device
         self.model_name = model_name
         self.tp_rank = get_tensor_model_parallel_rank()
         
         if self.tp_rank == 0:
             print(f"Creating HybridTPModel from {model_name}...")
         
+        # Handle device string or device object
+        if isinstance(device, str):
+            device_obj = torch.device(device)
+        else:
+            device_obj = device
+        self.device = device_obj
+        
         # Load HF model for reference and non-TP layers
-        dtype = dtype or torch.float16 if device.startswith("cuda") else torch.float32
+        dtype = dtype or torch.float16 if str(device_obj).startswith("cuda") else torch.float32
         hf_model = AutoModelForCausalLM.from_pretrained(
             model_name,
             dtype=dtype,
-            device_map="cpu",
+            device_map="cpu",  # Load on CPU first, then move to device
         )
         
         # Get config
@@ -153,18 +159,25 @@ class HybridTPModel(nn.Module):
         self.head_dim = self.hidden_size // self.num_heads
         self.intermediate_size = getattr(self.config, 'intermediate_size', 4 * self.hidden_size)
         
+        # Handle device string or device object
+        if isinstance(device, str):
+            device_obj = torch.device(device)
+        else:
+            device_obj = device
+        self.device = device_obj
+        
         # Use HF's embedding (not sharded for simplicity)
         self.embed_tokens = hf_model.model.embed_tokens
-        self.embed_tokens = self.embed_tokens.to(device)
+        self.embed_tokens = self.embed_tokens.to(device_obj)
         
         # Use HF's final norm
         self.norm = hf_model.model.norm
-        self.norm = self.norm.to(device)
+        self.norm = self.norm.to(device_obj)
         
         # Use HF's LM head (each rank has full vocab for simplicity)
         # In production, would use VocabParallelEmbedding
         self.lm_head = hf_model.lm_head
-        self.lm_head = self.lm_head.to(device)
+        self.lm_head = self.lm_head.to(device_obj)
         
         # Create TP wrapper for weight loading
         tp_wrapper = TPModelWrapper(model_name=model_name, device=device, dtype=dtype)
@@ -183,8 +196,15 @@ class HybridTPModel(nn.Module):
                 hf_layer=hf_layer,
                 tp_attention=tp_attention,
                 tp_mlp=tp_mlp,
-                device=device,
+                device=device_obj,
             )
+            # Ensure all components are on the correct device
+            # LayerNorm needs to be moved explicitly
+            hybrid_layer.input_layernorm = hybrid_layer.input_layernorm.to(device_obj)
+            hybrid_layer.post_attention_layernorm = hybrid_layer.post_attention_layernorm.to(device_obj)
+            # RoPE also needs to be on device if it exists
+            if hybrid_layer.rotary_emb is not None:
+                hybrid_layer.rotary_emb = hybrid_layer.rotary_emb.to(device_obj)
             self.layers.append(hybrid_layer)
         
         # Clean up HF model (we've extracted what we need)
