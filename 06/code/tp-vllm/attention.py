@@ -15,10 +15,10 @@ from typing import Optional, Tuple
 
 try:
     from .linear import QKVParallelLinear, RowParallelLinear
-    from .parallel_state import tensor_model_parallel_all_reduce
+    from .parallel_state import tensor_model_parallel_all_reduce, get_tensor_model_parallel_rank
 except ImportError:
     from linear import QKVParallelLinear, RowParallelLinear
-    from parallel_state import tensor_model_parallel_all_reduce
+    from parallel_state import tensor_model_parallel_all_reduce, get_tensor_model_parallel_rank
 
 
 class TensorParallelAttention(nn.Module):
@@ -90,6 +90,8 @@ class TensorParallelAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         kv_cache: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        rotary_emb: Optional[torch.nn.Module] = None,
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Forward pass through TP attention.
@@ -97,6 +99,8 @@ class TensorParallelAttention(nn.Module):
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
             kv_cache: Optional tuple of (k_cache, v_cache) for incremental decoding
+            position_ids: Optional position IDs for RoPE [batch, seq_len]
+            rotary_emb: Optional rotary embedding module (for RoPE)
         
         Returns:
             Output tensor [batch, seq_len, hidden_size]
@@ -113,9 +117,30 @@ class TensorParallelAttention(nn.Module):
         v = v.view(batch_size, seq_len, self.num_kv_heads_local, self.head_dim)
         
         # Transpose for attention: [batch, num_heads, seq_len, head_dim]
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        # (RoPE typically expects this shape or [batch, seq_len, num_heads, head_dim])
+        q = q.transpose(1, 2)  # [batch, num_heads_local, seq_len, head_dim]
+        k = k.transpose(1, 2)  # [batch, num_kv_heads_local, seq_len, head_dim]
+        v = v.transpose(1, 2)  # [batch, num_kv_heads_local, seq_len, head_dim]
+        
+        # Apply RoPE if provided (CRITICAL for Qwen models!)
+        # Align with HuggingFace Qwen2 implementation:
+        # 1. rotary_emb expects [batch, seq_len, num_heads, head_dim] and returns (cos, sin) with shape [batch, seq_len, head_dim]
+        # 2. apply_rotary_pos_emb expects q/k in [batch, num_heads, seq_len, head_dim] and cos/sin will broadcast
+        if rotary_emb is not None and position_ids is not None:
+            # CRITICAL: Do not use try/except to swallow errors - RoPE must work!
+            # Transpose to HF format: [batch, seq_len, num_heads, head_dim]
+            q_for_rope = q.transpose(1, 2)  # [batch, seq_len, num_heads_local, head_dim]
+            k_for_rope = k.transpose(1, 2)  # [batch, seq_len, num_kv_heads_local, head_dim]
+            
+            # Get cos, sin from rotary_emb (HF format: [batch, seq_len, head_dim])
+            # rotary_emb.forward(x, position_ids) where x is [batch, seq_len, ..., head_dim]
+            cos, sin = rotary_emb(k_for_rope, position_ids)
+            
+            # Apply RoPE using HF's apply_rotary_pos_emb
+            # q, k are [batch, num_heads, seq_len, head_dim]
+            # cos, sin are [batch, seq_len, head_dim] and will broadcast correctly
+            from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
+            q, k = apply_rotary_pos_emb(q, k, cos, sin)
         
         # Handle KV cache for incremental decoding
         # Keep separate k_kv/v_kv for storage (num_kv_heads_local)
@@ -145,15 +170,25 @@ class TensorParallelAttention(nn.Module):
         scores = torch.matmul(q, k_for_attn.transpose(-2, -1)) * self.scale
         
         # Apply causal mask if needed (for prefill)
-        # Use boolean mask with masked_fill to avoid NaN from 0 * -inf
+        # CRITICAL: Use boolean mask with masked_fill to avoid NaN from 0 * -inf
+        # Never use: mask = torch.ones(...) * -inf (this causes 0 * -inf = NaN)
         if kv_cache is None and seq_len > 1:
-            causal_mask = torch.triu(
-                torch.ones(seq_len, seq_len, device=scores.device, dtype=torch.bool),
-                diagonal=1
-            )
-            scores = scores.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
+            # Create boolean upper triangular mask (True = masked positions)
+            mask = torch.ones((seq_len, seq_len), device=scores.device, dtype=torch.bool).triu(1)
+            # Apply mask: masked positions get -inf, others unchanged
+            scores = scores.masked_fill(mask[None, None, :, :], float("-inf"))
+        
+        # Debug: Check for NaN (only on rank 0 to avoid spam)
+        if get_tensor_model_parallel_rank() == 0 and torch.isnan(scores).any():
+            import warnings
+            warnings.warn("NaN detected in attention scores before softmax!")
         
         attn_weights = F.softmax(scores, dim=-1)
+        
+        # Debug: Check for NaN after softmax
+        if get_tensor_model_parallel_rank() == 0 and torch.isnan(attn_weights).any():
+            import warnings
+            warnings.warn("NaN detected in attention weights after softmax!")
         attn_output = torch.matmul(attn_weights, v_for_attn)  # [batch, num_heads_local, seq_len, head_dim]
         
         # Reshape for output projection: [batch, seq_len, num_heads_local * head_dim]

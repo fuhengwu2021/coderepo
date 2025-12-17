@@ -6,7 +6,7 @@ checkpoints for tensor parallelism, matching vLLM's weight loading approach.
 """
 import torch
 from typing import Dict, Optional
-from transformers import AutoModel
+from transformers import AutoModel, AutoModelForCausalLM
 
 try:
     from .parallel_state import get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
@@ -86,7 +86,9 @@ def load_and_shard_state_dict(
                     print(f"  Note: Only rank0 loaded full weights. Other ranks will receive shards via broadcast.")
         else:
             # Fallback to torch.load
-            model = AutoModel.from_pretrained(
+            # CRITICAL: Use AutoModelForCausalLM to ensure lm_head is loaded
+            # AutoModel may not include lm_head, causing generation issues
+            model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 dtype=dtype,
                 device_map="cpu",  # Load on CPU first
@@ -100,7 +102,8 @@ def load_and_shard_state_dict(
                     print(f"  Note: Only rank0 loaded full weights. Other ranks will receive shards via broadcast.")
     except ImportError:
         # No safetensors, use torch.load
-        model = AutoModel.from_pretrained(
+        # CRITICAL: Use AutoModelForCausalLM to ensure lm_head is loaded
+        model = AutoModelForCausalLM.from_pretrained(
             model_path,
             dtype=dtype,
             device_map="cpu",

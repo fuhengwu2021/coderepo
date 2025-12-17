@@ -47,13 +47,11 @@ class HybridTPDecoderLayer(nn.Module):
         self.self_attn = tp_attention
         self.mlp = tp_mlp
         
-        # Get RoPE from HF layer if available
-        if hasattr(hf_layer.self_attn, 'rotary_emb'):
-            self.rotary_emb = hf_layer.self_attn.rotary_emb
-        elif hasattr(hf_layer, 'rotary_emb'):
-            self.rotary_emb = hf_layer.rotary_emb
-        else:
-            self.rotary_emb = None
+        # Get RoPE from HF model (Qwen2.5 has rotary_emb in model.model, not in each layer)
+        # Qwen models require RoPE for correct positional encoding
+        # Note: We'll get rotary_emb from the parent model, not from hf_layer
+        # This will be set in HybridTPModel.__init__
+        self.rotary_emb = None  # Will be set by parent model
     
     def _apply_rope(self, q: torch.Tensor, k: torch.Tensor, position_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Apply RoPE using HuggingFace's implementation"""
@@ -91,10 +89,14 @@ class HybridTPDecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
         
         # Attention (TP)
-        # Note: Our TP attention implementation doesn't include RoPE
-        # For Qwen models, RoPE is typically applied in the attention layer
-        # We'll use TP attention as-is (RoPE can be added later if needed)
-        attn_output, kv_cache = self.self_attn(hidden_states, kv_cache=kv_cache)
+        # Apply RoPE if available (critical for Qwen models!)
+        rotary_emb = getattr(self, 'rotary_emb', None)
+        attn_output, kv_cache = self.self_attn(
+            hidden_states,
+            kv_cache=kv_cache,
+            position_ids=position_ids,
+            rotary_emb=rotary_emb,
+        )
         
         # Residual connection
         hidden_states = residual + attn_output
@@ -181,6 +183,18 @@ class HybridTPModel(nn.Module):
         self.lm_head = hf_model.lm_head
         self.lm_head = self.lm_head.to(device_obj)
         
+        # Get RoPE from HF model (Qwen2.5 has rotary_emb in model.model, shared across all layers)
+        # This is CRITICAL for Qwen models!
+        if hasattr(hf_model.model, 'rotary_emb'):
+            self.rotary_emb = hf_model.model.rotary_emb
+            self.rotary_emb = self.rotary_emb.to(device_obj)
+            if self.tp_rank == 0:
+                print(f"  Found rotary_emb in model.model (shared across layers)")
+        else:
+            self.rotary_emb = None
+            if self.tp_rank == 0:
+                print("  Warning: No rotary_emb found in model.model - this may cause incorrect results!")
+        
         # Create TP wrapper for weight loading (use device_obj as string for compatibility)
         tp_wrapper = TPModelWrapper(model_name=model_name, device=str(device_obj), dtype=dtype)
         
@@ -200,13 +214,13 @@ class HybridTPModel(nn.Module):
                 tp_mlp=tp_mlp,
                 device=device_obj,
             )
+            # Set rotary_emb from parent model (shared across all layers for Qwen)
+            hybrid_layer.rotary_emb = self.rotary_emb
+            
             # Ensure all components are on the correct device
             # LayerNorm needs to be moved explicitly (they come from HF model which is on CPU)
             hybrid_layer.input_layernorm = hybrid_layer.input_layernorm.to(device_obj)
             hybrid_layer.post_attention_layernorm = hybrid_layer.post_attention_layernorm.to(device_obj)
-            # RoPE also needs to be on device if it exists
-            if hybrid_layer.rotary_emb is not None:
-                hybrid_layer.rotary_emb = hybrid_layer.rotary_emb.to(device_obj)
             # Move the entire layer to device to ensure all submodules are on device
             hybrid_layer = hybrid_layer.to(device_obj)
             self.layers.append(hybrid_layer)
@@ -225,7 +239,7 @@ class HybridTPModel(nn.Module):
         input_ids: torch.Tensor,
         position_ids: Optional[torch.Tensor] = None,
         kv_caches: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Forward pass through hybrid TP model
         
@@ -235,7 +249,7 @@ class HybridTPModel(nn.Module):
             kv_caches: Optional list of (k_cache, v_cache) for each layer
         
         Returns:
-            logits: [batch, seq_len, vocab_size]
+            (logits, kv_caches): logits [batch, seq_len, vocab_size], updated kv_caches
         """
         batch_size, seq_len = input_ids.shape
         
@@ -273,7 +287,7 @@ class HybridTPModel(nn.Module):
         # LM Head (HF - each rank has full vocab)
         logits = self.lm_head(hidden_states)  # [batch, seq_len, vocab_size]
         
-        return logits
+        return logits, kv_caches
     
     def generate(
         self,
@@ -319,13 +333,13 @@ class HybridTPModel(nn.Module):
             if rank == 0:
                 print(f"  Prefill: processing {input_ids.shape[1]} prompt tokens through {self.num_layers} layers...")
             
-            # Prefill: forward through model
-            # This may take time, especially on first run (JIT compilation, etc.)
+            # Prefill: forward through model with kv_caches=None
+            # This will return both logits and kv_caches
             import time
             start_time = time.time()
             
             try:
-                logits = self.forward(input_ids)  # [batch, seq_len, vocab_size]
+                logits, kv_caches = self.forward(input_ids, kv_caches=None)  # [batch, seq_len, vocab_size]
             except Exception as e:
                 if rank == 0:
                     print(f"\n  Error during forward pass: {e}")
@@ -347,11 +361,10 @@ class HybridTPModel(nn.Module):
             next_token_logits = logits[0, -1, :]  # [vocab_size]
             
             if rank == 0:
-                print(f"  Generating {max_new_tokens} tokens (this may be slow on CPU)...")
+                print(f"  Generating {max_new_tokens} tokens with KV cache incremental decode...")
             
-            # Generate tokens one by one
-            # Note: This is inefficient (full forward each step) but simpler for demo
-            # In production, would use proper KV cache incremental decode
+            # Generate tokens one by one using KV cache incremental decode
+            # This is the correct way: only forward the new token, reuse KV cache
             for step in range(max_new_tokens):
                 if rank == 0 and step % 10 == 0:
                     print(f"    Step {step}/{max_new_tokens}...", end='\r', flush=True)
@@ -364,24 +377,43 @@ class HybridTPModel(nn.Module):
                 else:
                     next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
                 
-                # Append to generated sequence
-                generated_ids = torch.cat([generated_ids, next_token.unsqueeze(0)], dim=1)
-                
-                # Check for EOS
+                # Check for EOS before appending
                 if next_token.item() == tokenizer.eos_token_id:
                     if rank == 0:
                         print(f"    EOS token reached at step {step}")
                     break
                 
-                # Decode step: forward with updated sequence
-                # This is inefficient but works for the demo
-                # In production, would only forward the new token with KV cache
-                logits = self.forward(generated_ids)
-                next_token_logits = logits[0, -1, :]
+                # Append to generated sequence
+                generated_ids = torch.cat([generated_ids, next_token.unsqueeze(0)], dim=1)
+                
+                # Incremental decode: only forward the new token with KV cache
+                # Position is the current absolute position (after appending)
+                current_position = generated_ids.shape[1] - 1
+                position_ids = torch.tensor([[current_position]], device=self.device, dtype=torch.long)
+                
+                # Forward only the new token, reuse kv_caches
+                new_token_ids = next_token.unsqueeze(0)  # [batch, 1]
+                logits, kv_caches = self.forward(new_token_ids, position_ids=position_ids, kv_caches=kv_caches)
+                next_token_logits = logits[0, -1, :]  # [vocab_size]
             
             if rank == 0:
                 print()  # New line after progress
         
         # Decode generated text
         generated_text = tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+        
+        # If chat template was used, extract only the assistant's response
+        # The chat template adds system/user/assistant prefixes
+        if hasattr(tokenizer, 'apply_chat_template') and tokenizer.chat_template:
+            # Try to extract just the assistant response
+            # Look for "assistant" marker
+            if "assistant" in generated_text.lower():
+                parts = generated_text.split("assistant")
+                if len(parts) > 1:
+                    # Take everything after "assistant"
+                    assistant_response = parts[-1].strip()
+                    # Remove any remaining template artifacts
+                    if assistant_response:
+                        generated_text = assistant_response
+        
         return generated_text

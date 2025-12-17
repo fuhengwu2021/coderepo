@@ -436,6 +436,13 @@ class QKVParallelLinear(ColumnParallelLinear):
             f"num_heads_local={self.num_heads}, num_kv_heads_local={self.num_kv_heads}, "
             f"head_size={self.head_size}"
         )
+        
+        # Assert that num_heads_local is divisible by num_kv_heads_local for GQA
+        # This ensures repeat_interleave works correctly in attention
+        assert self.num_heads % self.num_kv_heads == 0, (
+            f"GQA requires num_heads_local ({self.num_heads}) to be divisible by "
+            f"num_kv_heads_local ({self.num_kv_heads})"
+        )
     
     def _get_shard_offset_mapping(self, shard_id: str) -> int:
         """Get offset in output dimension for Q/K/V shard"""
@@ -461,66 +468,88 @@ class QKVParallelLinear(ColumnParallelLinear):
         loaded_shard_id: Optional[str] = None,
     ):
         """
-        Load QKV weight from checkpoint.
+        Load QKV weight from checkpoint (vLLM-style).
+        
+        CRITICAL: PyTorch Linear.weight has shape [out_features, in_features]
+        HuggingFace checkpoint may have [in_features, out_features] (transposed).
+        We need to handle both formats and shard along dim=0 (out_features).
         
         Handles both:
-        - Fused QKV: single weight matrix [hidden_size, (Q+K+V) * head_size]
+        - Fused QKV: single weight matrix
         - Separate Q/K/V: loaded_shard_id indicates which to load
         
         Args:
             loaded_weight: Weight tensor from checkpoint
             loaded_shard_id: "q", "k", "v", or None (for fused)
         """
+        # PyTorch Linear.weight has shape [out_features, in_features]
+        # HuggingFace checkpoints also use this format, so no transpose needed
+        # However, if we detect the wrong format (shape[0] == hidden_size and shape[1] > hidden_size),
+        # we may need to transpose. For now, assume HuggingFace format is correct.
+        # Note: HuggingFace Linear layers already have [out_features, in_features] format
+        
         if loaded_shard_id is None:
             # Fused QKV: split and load each part
-            # Format: [hidden_size, (total_q + total_k + total_v) * head_size]
+            # After transpose (if needed), format is: [(total_q + total_k + total_v) * head_size, hidden_size]
             total_q_size = self.total_num_heads * self.head_size
             total_kv_size = self.total_num_kv_heads * self.head_size
             
-            # Extract Q, K, V parts
-            q_weight = loaded_weight[:, :total_q_size]
-            k_weight = loaded_weight[:, total_q_size:total_q_size + total_kv_size]
-            v_weight = loaded_weight[:, total_q_size + total_kv_size:total_q_size + 2 * total_kv_size]
+            # Extract Q, K, V parts along dim=0 (out_features)
+            q_weight = loaded_weight[:total_q_size, :]
+            k_weight = loaded_weight[total_q_size:total_q_size + total_kv_size, :]
+            v_weight = loaded_weight[total_q_size + total_kv_size:total_q_size + 2 * total_kv_size, :]
             
-            # Shard each part and concatenate
+            # Shard each part along dim=0 (out_features)
             q_shard = self._shard_weight(q_weight, "q")
             k_shard = self._shard_weight(k_weight, "k")
             v_shard = self._shard_weight(v_weight, "v")
             
-            # Concatenate shards: [hidden_size, (q_shard + k_shard + v_shard)]
-            self.weight.data.copy_(torch.cat([q_shard, k_shard, v_shard], dim=1))
+            # Concatenate shards along dim=0: [shard_size, hidden_size]
+            self.weight.data.copy_(torch.cat([q_shard, k_shard, v_shard], dim=0))
         else:
             # Separate Q/K/V: load specific shard
             assert loaded_shard_id in ["q", "k", "v"]
             shard_offset = self._get_shard_offset_mapping(loaded_shard_id)
             shard_size = self._get_shard_size_mapping(loaded_shard_id)
             
-            # Shard the loaded weight
+            # Shard the loaded weight along dim=0 (out_features)
             sharded = self._shard_weight(loaded_weight, loaded_shard_id)
             
-            # Place in correct position in weight matrix
-            self.weight.data[:, shard_offset:shard_offset + shard_size].copy_(sharded)
+            # Place in correct position in weight matrix (along dim=0)
+            self.weight.data[shard_offset:shard_offset + shard_size, :].copy_(sharded)
     
     def _shard_weight(self, weight: torch.Tensor, shard_id: str) -> torch.Tensor:
-        """Shard weight for Q, K, or V based on TP rank"""
+        """
+        Shard weight for Q, K, or V based on TP rank.
+        
+        CRITICAL: PyTorch Linear.weight has shape [out_features, in_features]
+        For ColumnParallelLinear, we shard along dim=0 (out_features), NOT dim=1!
+        
+        Args:
+            weight: Weight tensor from checkpoint [out_features, in_features]
+            shard_id: "q", "k", or "v"
+        
+        Returns:
+            Sharded weight [shard_size, in_features]
+        """
         if shard_id == "q":
-            # Shard Q heads
+            # Shard Q heads along dim=0 (out_features)
             shard_size = self.num_heads * self.head_size
             start_idx = self.tp_rank * shard_size
-            return weight.narrow(1, start_idx, shard_size)
+            return weight.narrow(0, start_idx, shard_size)
         else:
-            # Shard K or V heads
+            # Shard K or V heads along dim=0 (out_features)
             if self.num_kv_head_replicas > 1:
                 # Replicate: each rank gets same KV heads
                 kv_head_idx = self.tp_rank // self.num_kv_head_replicas
                 shard_size = self.num_kv_heads * self.head_size
                 start_idx = kv_head_idx * shard_size
-                return weight.narrow(1, start_idx, shard_size)
+                return weight.narrow(0, start_idx, shard_size)
             else:
                 # Partition: shard KV heads across ranks
                 shard_size = self.num_kv_heads * self.head_size
                 start_idx = self.tp_rank * shard_size
-                return weight.narrow(1, start_idx, shard_size)
+                return weight.narrow(0, start_idx, shard_size)
     
     def forward(self, input_: torch.Tensor) -> torch.Tensor:
         """
