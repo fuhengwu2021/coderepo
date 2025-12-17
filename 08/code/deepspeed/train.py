@@ -104,8 +104,19 @@ def main():
             print("DeepSpeed ZeRO-3 Initialization Complete")
             print("=" * 60)
             print(f"  ZeRO Stage: {model_engine.zero_optimization_stage()}")
-            print(f"  Parameter offloading: {model_engine.cpu_offload_enabled()}")
-            print(f"  Optimizer offloading: {model_engine.optimizer_offload_enabled()}")
+            # Check parameter offload (ZeRO-3 only)
+            param_offload = model_engine.zero_offload_param()
+            param_offload_enabled = param_offload is not None and str(param_offload.device) != "none"
+            print(f"  Parameter offloading: {param_offload_enabled}")
+            if param_offload_enabled:
+                print(f"    Parameter offload device: {param_offload.device}")
+            # Check optimizer offload
+            optimizer_offload_enabled = model_engine.zero_use_cpu_optimizer()
+            print(f"  Optimizer offloading: {optimizer_offload_enabled}")
+            if optimizer_offload_enabled:
+                opt_offload = model_engine.zero_offload_optimizer()
+                if opt_offload is not None:
+                    print(f"    Optimizer offload device: {opt_offload.device}")
             print(f"  Global rank: {model_engine.global_rank}")
             print(f"  World size: {model_engine.world_size}")
             print(f"  Device: {model_engine.device}")
@@ -116,6 +127,9 @@ def main():
         optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5)
         if rank == 0:
             print("WARNING: Running without DeepSpeed (for testing only)")
+        # For non-DeepSpeed mode, set device manually
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model_engine = model_engine.to(device)
     
     model_engine.train()
     
@@ -132,7 +146,9 @@ def main():
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
     
     # Training loop
-    if model_engine.global_rank == 0:
+    # Use hasattr to check if global_rank exists (DeepSpeed engine) or use rank (non-DeepSpeed)
+    is_rank_zero = (hasattr(model_engine, 'global_rank') and model_engine.global_rank == 0) or (not hasattr(model_engine, 'global_rank') and rank == 0)
+    if is_rank_zero:
         print(f"\nStarting training for {args.steps} steps...\n")
     
     step = 0
@@ -142,8 +158,12 @@ def main():
                 break
             
             # Move inputs to device
-            input_ids = batch["input_ids"].to(model_engine.device)
-            attention_mask = batch["attention_mask"].to(model_engine.device)
+            if hasattr(model_engine, 'device'):
+                device = model_engine.device
+            else:
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
             
             # Forward pass
             outputs = model_engine(
@@ -154,10 +174,17 @@ def main():
             loss = outputs.loss
             
             # Backward pass and optimizer step
-            model_engine.backward(loss)
-            model_engine.step()
+            if hasattr(model_engine, 'backward') and hasattr(model_engine, 'step'):
+                # DeepSpeed mode
+                model_engine.backward(loss)
+                model_engine.step()
+            else:
+                # Non-DeepSpeed mode
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
             
-            if model_engine.global_rank == 0:
+            if is_rank_zero:
                 print(f"[Step {step}] Loss: {loss.item():.4f}")
             
             step += 1
@@ -165,7 +192,7 @@ def main():
             if step >= args.steps:
                 break
     
-    if model_engine.global_rank == 0:
+    if is_rank_zero:
         print("\nTraining completed!")
         print(f"Total steps: {step}")
 
