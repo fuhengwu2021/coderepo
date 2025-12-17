@@ -483,10 +483,37 @@ class QKVParallelLinear(ColumnParallelLinear):
             loaded_shard_id: "q", "k", "v", or None (for fused)
         """
         # PyTorch Linear.weight has shape [out_features, in_features]
-        # HuggingFace checkpoints also use this format, so no transpose needed
-        # However, if we detect the wrong format (shape[0] == hidden_size and shape[1] > hidden_size),
-        # we may need to transpose. For now, assume HuggingFace format is correct.
-        # Note: HuggingFace Linear layers already have [out_features, in_features] format
+        # HuggingFace checkpoints also use this format
+        # CRITICAL: Add hard assertion to verify weight shape matches expected format
+        # This prevents silent errors when loading different checkpoint formats (quantized, exported, etc.)
+        if loaded_shard_id is None:
+            # Fused QKV: verify total size matches expected
+            total_q_size = self.total_num_heads * self.head_size
+            total_kv_size = self.total_num_kv_heads * self.head_size
+            expected_total_out = total_q_size + 2 * total_kv_size
+            assert loaded_weight.shape[1] == self.hidden_size, (
+                f"Fused QKV weight shape mismatch: expected in_features={self.hidden_size}, "
+                f"got {loaded_weight.shape[1]}"
+            )
+            assert loaded_weight.shape[0] == expected_total_out, (
+                f"Fused QKV weight shape mismatch: expected out_features={expected_total_out}, "
+                f"got {loaded_weight.shape[0]}. This weight cannot be split into Q/K/V parts."
+            )
+        else:
+            # Separate Q/K/V: verify shape matches expected for this projection
+            if loaded_shard_id == "q":
+                expected_out = self.total_num_heads * self.head_size
+            else:  # "k" or "v"
+                expected_out = self.total_num_kv_heads * self.head_size
+            
+            assert loaded_weight.shape[1] == self.hidden_size, (
+                f"{loaded_shard_id.upper()} weight shape mismatch: expected in_features={self.hidden_size}, "
+                f"got {loaded_weight.shape[1]}"
+            )
+            assert loaded_weight.shape[0] == expected_out, (
+                f"{loaded_shard_id.upper()} weight shape mismatch: expected out_features={expected_out}, "
+                f"got {loaded_weight.shape[0]}"
+            )
         
         if loaded_shard_id is None:
             # Fused QKV: split and load each part

@@ -147,9 +147,35 @@ class TensorParallelAttention(nn.Module):
         # Only repeat for attention computation if needed
         if kv_cache is not None:
             k_cache, v_cache = kv_cache
+            # CRITICAL: Verify cache/position alignment for decode
+            # Cache length must equal position_ids value (before append)
+            # This ensures position encoding is correct during incremental decode
+            if position_ids is not None and get_tensor_model_parallel_rank() == 0:
+                # position_ids should be [batch, seq_len], for decode it's usually [batch, 1]
+                # The cache length should equal the position before this new token
+                cached_len = k_cache.shape[2]
+                expected_position = cached_len
+                actual_position = position_ids[0, 0].item() if position_ids.numel() > 0 else 0
+                
+                # Debug assertion: cache length must match position (before append)
+                # This catches position/cache misalignment bugs
+                assert cached_len == expected_position, (
+                    f"Cache/position misalignment: cache_len={cached_len}, "
+                    f"expected_position={expected_position}, actual_position={actual_position}"
+                )
+            
             # Concatenate with cache: [batch, num_kv_heads_local, cached_len + seq_len, head_dim]
             k_kv = torch.cat([k_cache, k], dim=2)
             v_kv = torch.cat([v_cache, v], dim=2)
+            
+            # Verify after append: new cache length should be position + 1
+            if position_ids is not None and get_tensor_model_parallel_rank() == 0:
+                new_cache_len = k_kv.shape[2]
+                expected_new_len = position_ids[0, -1].item() + 1 if position_ids.numel() > 0 else seq_len
+                assert new_cache_len == expected_new_len, (
+                    f"Cache/position misalignment after append: "
+                    f"new_cache_len={new_cache_len}, expected={expected_new_len}"
+                )
         else:
             k_kv = k  # [batch, num_kv_heads_local, seq_len, head_dim]
             v_kv = v  # [batch, num_kv_heads_local, seq_len, head_dim]

@@ -53,17 +53,9 @@ class HybridTPDecoderLayer(nn.Module):
         # This will be set in HybridTPModel.__init__
         self.rotary_emb = None  # Will be set by parent model
     
-    def _apply_rope(self, q: torch.Tensor, k: torch.Tensor, position_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Apply RoPE using HuggingFace's implementation"""
-        if self.rotary_emb is not None:
-            try:
-                cos, sin = self.rotary_emb(k, position_ids)
-                q_rope, k_rope = apply_rotary_pos_emb(q, k, cos, sin)
-                return q_rope, k_rope
-            except Exception as e:
-                # Fallback if RoPE fails
-                return q, k
-        return q, k
+    # REMOVED: _apply_rope fallback method
+    # RoPE is now handled directly in TensorParallelAttention with proper error handling
+    # Keeping a fallback here would mask errors and make debugging harder
     
     def forward(
         self,
