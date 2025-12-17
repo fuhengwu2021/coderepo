@@ -108,12 +108,18 @@ class TPModelWrapper:
         except ImportError:
             from attention import TensorParallelAttention
         
+        # Check if HF attention has bias (Qwen2.5-0.5B-Instruct has bias=True)
+        # We need to match HF's bias setting
+        # Check state_dict for bias keys (more reliable than loading full model)
+        q_bias_key = f"model.layers.{layer_idx}.self_attn.q_proj.bias"
+        has_bias = q_bias_key in self.state_dict
+        
         attn = TensorParallelAttention(
             hidden_size=self.hidden_size,
             num_heads=self.num_heads,
             num_kv_heads=self.num_kv_heads,
             head_dim=self.head_dim,
-            bias=False,
+            bias=has_bias,  # Match HF's bias setting
             params_dtype=self.dtype,
         ).to(self.device)
         
@@ -130,17 +136,36 @@ class TPModelWrapper:
             attn.qkv_proj.weight_loader_qkv(self.state_dict[q_key], "q")
             attn.qkv_proj.weight_loader_qkv(self.state_dict[k_key], "k")
             attn.qkv_proj.weight_loader_qkv(self.state_dict[v_key], "v")
+            
+            # Load bias if present (Qwen2.5-0.5B-Instruct has bias)
+            q_bias_key = f"{prefix}.q_proj.bias"
+            k_bias_key = f"{prefix}.k_proj.bias"
+            v_bias_key = f"{prefix}.v_proj.bias"
+            if all(k in self.state_dict for k in [q_bias_key, k_bias_key, v_bias_key]):
+                # Load each bias separately using bias_loader_qkv
+                attn.qkv_proj.bias_loader_qkv(self.state_dict[q_bias_key], "q")
+                attn.qkv_proj.bias_loader_qkv(self.state_dict[k_bias_key], "k")
+                attn.qkv_proj.bias_loader_qkv(self.state_dict[v_bias_key], "v")
         else:
             # Try fused QKV
             qkv_key = f"{prefix}.qkv_proj.weight"
             if qkv_key in self.state_dict:
                 # Fused QKV
                 attn.qkv_proj.weight_loader_qkv(self.state_dict[qkv_key], loaded_shard_id=None)
+                # Load fused bias if present
+                qkv_bias_key = f"{prefix}.qkv_proj.bias"
+                if qkv_bias_key in self.state_dict and attn.qkv_proj.bias is not None:
+                    attn.qkv_proj.bias_loader_qkv(self.state_dict[qkv_bias_key], loaded_shard_id=None)
         
         # Load output projection
         o_key = f"{prefix}.o_proj.weight"
         if o_key in self.state_dict:
             attn.o_proj.weight_loader(self.state_dict[o_key])
+        
+        # Load o_proj bias if present (usually False for o_proj)
+        o_bias_key = f"{prefix}.o_proj.bias"
+        if o_bias_key in self.state_dict and attn.o_proj.bias is not None:
+            attn.o_proj.bias_loader(self.state_dict[o_bias_key])
         
         return attn
     
@@ -154,6 +179,13 @@ class TPModelWrapper:
         Returns:
             TP MLP layer with loaded weights
         """
+        # Check if HF MLP has bias (usually False for gate/up/down_proj)
+        prefix = f"model.layers.{layer_idx}.mlp"
+        gate_bias_key = f"{prefix}.gate_proj.bias"
+        has_bias = gate_bias_key in self.state_dict
+        
+        # TensorParallelMLP doesn't support bias parameter in __init__
+        # MLP layers in Qwen typically don't have bias anyway
         mlp = TensorParallelMLP(
             hidden_size=self.hidden_size,
             intermediate_size=self.intermediate_size,

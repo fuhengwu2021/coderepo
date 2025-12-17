@@ -501,6 +501,7 @@ class QKVParallelLinear(ColumnParallelLinear):
             )
         else:
             # Separate Q/K/V: verify shape matches expected for this projection
+            assert loaded_shard_id in ["q", "k", "v"]
             if loaded_shard_id == "q":
                 expected_out = self.total_num_heads * self.head_size
             else:  # "k" or "v"
@@ -605,4 +606,52 @@ class QKVParallelLinear(ColumnParallelLinear):
         k = qkv[..., self.q_size:self.q_size + self.kv_size]
         v = qkv[..., self.q_size + self.kv_size:]
         return q, k, v
+    
+    def bias_loader_qkv(
+        self,
+        loaded_bias: torch.Tensor,
+        loaded_shard_id: Optional[str] = None,
+    ):
+        """
+        Load QKV bias from checkpoint.
+        
+        Handles both:
+        - Fused QKV: single bias tensor
+        - Separate Q/K/V: loaded_shard_id indicates which to load
+        
+        Args:
+            loaded_bias: Bias tensor from checkpoint
+            loaded_shard_id: "q", "k", "v", or None (for fused)
+        """
+        if self.bias is None:
+            return  # No bias in this layer
+        
+        if loaded_shard_id is None:
+            # Fused QKV bias: split and load each part
+            total_q_size = self.total_num_heads * self.head_size
+            total_kv_size = self.total_num_kv_heads * self.head_size
+            
+            # Extract Q, K, V bias parts
+            q_bias = loaded_bias[:total_q_size]
+            k_bias = loaded_bias[total_q_size:total_q_size + total_kv_size]
+            v_bias = loaded_bias[total_q_size + total_kv_size:total_q_size + 2 * total_kv_size]
+            
+            # Shard each part along dim=0 (out_features)
+            q_bias_shard = q_bias.narrow(0, self.tp_rank * self.q_size, self.q_size)
+            k_bias_shard = k_bias.narrow(0, self.tp_rank * self.kv_size, self.kv_size)
+            v_bias_shard = v_bias.narrow(0, self.tp_rank * self.kv_size, self.kv_size)
+            
+            # Concatenate shards
+            self.bias.data.copy_(torch.cat([q_bias_shard, k_bias_shard, v_bias_shard], dim=0))
+        else:
+            # Separate Q/K/V bias: load specific shard
+            assert loaded_shard_id in ["q", "k", "v"]
+            shard_offset = self._get_shard_offset_mapping(loaded_shard_id)
+            shard_size = self._get_shard_size_mapping(loaded_shard_id)
+            
+            # Shard the loaded bias along dim=0 (out_features)
+            bias_shard = loaded_bias.narrow(0, self.tp_rank * shard_size, shard_size)
+            
+            # Place in correct position in bias vector (along dim=0)
+            self.bias.data[shard_offset:shard_offset + shard_size].copy_(bias_shard)
 

@@ -7,18 +7,21 @@ using SLURM's environment variables.
 
 Usage examples:
 
-1. Using srun with explicit task configuration:
+1. Single GPU (no distributed setup):
+    srun -N 1 --gres=gpu:1 python train.py
+
+2. Using srun with explicit task configuration:
     srun -N 1 --gres=gpu:2 --ntasks-per-node=2 python train.py
     srun -N 2 --gres=gpu:1 --ntasks-per-node=1 python train.py
 
-2. Using torchrun (recommended):
+3. Using torchrun (recommended):
     srun -N 1 --gres=gpu:2 torchrun --nproc_per_node=2 train.py
     srun -N 2 --gres=gpu:1 torchrun --nproc_per_node=1 --nnodes=2 train.py
 
-3. Using sbatch with a batch script (see chapter8.md for examples)
+4. Using sbatch with a batch script (see chapter8.md for examples)
 
-Note: The simple command "srun -N 1 --gres=gpu:2 python train.py" will only
-launch 1 process. To use multiple GPUs, you need --ntasks-per-node or torchrun.
+Note: The script automatically detects single GPU mode and skips distributed
+setup when world_size=1, making it work seamlessly with single GPU jobs.
 """
 
 import os
@@ -69,9 +72,11 @@ def setup_distributed():
     """
     Initialize distributed training using SLURM environment variables.
     
-    This function works with SLURM's automatic environment variable setup
-    when using srun or sbatch.
+    Returns None if running in single-process mode.
     """
+    # Disable IPv6 warnings
+    os.environ['NCCL_SOCKET_IFNAME'] = '^docker,lo'
+    
     # Check if we're in a SLURM environment
     if 'SLURM_PROCID' in os.environ:
         # SLURM mode: use SLURM environment variables
@@ -96,7 +101,13 @@ def setup_distributed():
         master_addr = os.environ.get('MASTER_ADDR', 'localhost')
         master_port = os.environ.get('MASTER_PORT', '29500')
     
-    # Set up the process group
+    # If world_size is 1, we're running single process - skip distributed setup
+    if world_size == 1:
+        print("Running in single-process mode (no distributed training)")
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        return 0, 1, 0, device, False
+    
+    # Set up the process group for distributed training
     os.environ['MASTER_ADDR'] = master_addr
     os.environ['MASTER_PORT'] = str(master_port)
     
@@ -110,12 +121,13 @@ def setup_distributed():
     torch.cuda.set_device(local_rank)
     device = torch.device(f'cuda:{local_rank}')
     
-    return rank, world_size, local_rank, device
+    return rank, world_size, local_rank, device, True
 
 
-def cleanup_distributed():
+def cleanup_distributed(is_distributed):
     """Clean up distributed training."""
-    dist.destroy_process_group()
+    if is_distributed:
+        dist.destroy_process_group()
 
 
 def train_one_epoch(model, dataloader, optimizer, criterion, device, rank, epoch):
@@ -152,37 +164,53 @@ def main():
     parser.add_argument('--input-dim', type=int, default=10, help='Input dimension')
     args = parser.parse_args()
     
-    # Setup distributed training
-    rank, world_size, local_rank, device = setup_distributed()
+    # Setup distributed training (or single process)
+    rank, world_size, local_rank, device, is_distributed = setup_distributed()
     
     if rank == 0:
-        print(f'Initialized distributed training')
+        print(f'Training configuration:')
         print(f'  World size: {world_size}')
         print(f'  Rank: {rank}, Local rank: {local_rank}')
         print(f'  Device: {device}')
+        print(f'  Distributed: {is_distributed}')
         print(f'  Epochs: {args.epochs}')
         print(f'  Batch size per GPU: {args.batch_size}')
         print(f'  Total batch size: {args.batch_size * world_size}')
     
     # Create model and move to device
     model = SimpleModel(input_dim=args.input_dim).to(device)
-    model = DDP(model, device_ids=[local_rank])
     
-    # Create dataset and dataloader with distributed sampler
+    # Wrap with DDP only if distributed
+    if is_distributed:
+        model = DDP(model, device_ids=[local_rank])
+    
+    # Create dataset and dataloader
     dataset = SimpleDataset(size=args.dataset_size, input_dim=args.input_dim)
-    sampler = DistributedSampler(
-        dataset,
-        num_replicas=world_size,
-        rank=rank,
-        shuffle=True
-    )
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        sampler=sampler,
-        num_workers=2,
-        pin_memory=True
-    )
+    
+    if is_distributed:
+        # Use DistributedSampler for distributed training
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True
+        )
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            sampler=sampler,
+            num_workers=2,
+            pin_memory=True
+        )
+    else:
+        # Use regular DataLoader for single GPU
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=2,
+            pin_memory=True
+        )
     
     # Setup optimizer and loss function
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -194,7 +222,8 @@ def main():
     
     for epoch in range(args.epochs):
         # Set epoch for distributed sampler (important for shuffling)
-        sampler.set_epoch(epoch)
+        if is_distributed:
+            sampler.set_epoch(epoch)
         
         avg_loss = train_one_epoch(
             model, dataloader, optimizer, criterion, device, rank, epoch
@@ -207,7 +236,7 @@ def main():
         print('Training completed!')
     
     # Cleanup
-    cleanup_distributed()
+    cleanup_distributed(is_distributed)
 
 
 if __name__ == '__main__':

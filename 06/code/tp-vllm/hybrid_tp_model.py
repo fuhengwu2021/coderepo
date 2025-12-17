@@ -379,9 +379,23 @@ class HybridTPModel(nn.Module):
                 generated_ids = torch.cat([generated_ids, next_token.unsqueeze(0)], dim=1)
                 
                 # Incremental decode: only forward the new token with KV cache
-                # Position is the current absolute position (after appending)
+                # Position is the current absolute position (the position of the token we just appended)
+                # CRITICAL: position_ids must match cache length for correct positional encoding
+                # After appending next_token, the new token is at position generated_ids.shape[1] - 1
                 current_position = generated_ids.shape[1] - 1
                 position_ids = torch.tensor([[current_position]], device=self.device, dtype=torch.long)
+                
+                # Debug: Verify position matches cache length (before forward)
+                # This assertion ensures cache/position alignment
+                # The cache should have length = current_position (the position of the token we're about to process)
+                if rank == 0 and len(kv_caches) > 0 and kv_caches[0] is not None:
+                    k_cache_0, _ = kv_caches[0]
+                    cache_len = k_cache_0.shape[2]
+                    assert cache_len == current_position, (
+                        f"Position/cache misalignment at decode step {step}: "
+                        f"position={current_position}, cache_len={cache_len}. "
+                        f"Cache should have length equal to position of token being processed."
+                    )
                 
                 # Forward only the new token, reuse kv_caches
                 new_token_ids = next_token.unsqueeze(0)  # [batch, 1]

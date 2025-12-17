@@ -154,14 +154,16 @@ class TensorParallelAttention(nn.Module):
                 # position_ids should be [batch, seq_len], for decode it's usually [batch, 1]
                 # The cache length should equal the position before this new token
                 cached_len = k_cache.shape[2]
-                expected_position = cached_len
+                # For decode, position_ids[0, 0] is the absolute position of the new token
+                # Cache should have length equal to this position (before we append)
                 actual_position = position_ids[0, 0].item() if position_ids.numel() > 0 else 0
                 
                 # Debug assertion: cache length must match position (before append)
                 # This catches position/cache misalignment bugs
-                assert cached_len == expected_position, (
-                    f"Cache/position misalignment: cache_len={cached_len}, "
-                    f"expected_position={expected_position}, actual_position={actual_position}"
+                assert cached_len == actual_position, (
+                    f"Cache/position misalignment (before append): "
+                    f"cache_len={cached_len}, position={actual_position}. "
+                    f"Cache should have length equal to position before appending new token."
                 )
             
             # Concatenate with cache: [batch, num_kv_heads_local, cached_len + seq_len, head_dim]
