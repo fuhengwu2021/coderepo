@@ -66,8 +66,9 @@ echo "Logs directory: $SCRIPT_DIR/logs"
 echo ""
 
 # --------- Required distributed environment variables ---------
-# Get master node address from SLURM (first node in the list)
-export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+# For single-node multi-GPU setups, use localhost to avoid hostfile issues
+# For true multi-node, you would use the first node's hostname
+export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=29500
 export WORLD_SIZE=$SLURM_NTASKS
 
@@ -156,27 +157,50 @@ elif [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
     CONDA_INIT_CMD="source ~/anaconda3/etc/profile.d/conda.sh"
 fi
 
-# Use bash -c to activate conda and run deepspeed on each node
-# Add debugging to verify conda activation on each node
+# For single-node multi-GPU setups with SLURM, use srun to launch Python script directly
+# Don't use DeepSpeed's launcher - let the Python script handle distributed setup using SLURM env vars
+# Handle GPU mapping per node
+NODE_NAME=$SLURMD_NODENAME
+if [[ "$NODE_NAME" =~ ^node([0-9]+)$ ]]; then
+    GPU_NUM=${BASH_REMATCH[1]}
+    echo "Node $NODE_NAME mapped to GPU $GPU_NUM"
+else
+    echo "Warning: Could not extract GPU number from node name '$NODE_NAME'"
+    GPU_NUM=$SLURM_LOCALID
+fi
+
+# Get Python command from conda environment
+PYTHON_CMD=$(which python)
+echo "Python command: $PYTHON_CMD"
+echo ""
+
+# Use srun to launch Python script directly (not DeepSpeed launcher)
+# Each srun task runs one Python process, and the script uses SLURM env vars for distributed setup
+# Set CUDA_VISIBLE_DEVICES per node before launching
 srun --chdir="$SCRIPT_DIR" --label \
     bash -c "
-        echo '[Node \$(hostname)] Activating conda environment...'
-        $CONDA_INIT_CMD || echo '[Node \$(hostname)] WARNING: Conda init failed, trying alternative paths...'
+        NODE=\$(hostname)
+        echo \"[Node \$NODE] Activating conda environment...\"
+        $CONDA_INIT_CMD || echo \"[Node \$NODE] WARNING: Conda init failed\"
         conda activate research || {
-            echo '[Node \$(hostname)] ERROR: Failed to activate conda environment research'
-            echo '[Node \$(hostname)] Available environments:'
-            conda env list || echo '[Node \$(hostname)] Conda command not found'
+            echo \"[Node \$NODE] ERROR: Failed to activate conda environment research\"
             exit 1
         }
-        echo '[Node \$(hostname)] Conda environment activated'
-        echo '[Node \$(hostname)] Python path: \$(which python)'
-        echo '[Node \$(hostname)] DeepSpeed path: \$(which deepspeed)'
-        python -c 'import deepspeed; print(f\"[Node \$(hostname)] DeepSpeed version: {deepspeed.__version__}\")' || {
-            echo '[Node \$(hostname)] ERROR: DeepSpeed import failed'
-            exit 1
-        }
-        echo '[Node \$(hostname)] Starting DeepSpeed training...'
-        deepspeed --num_gpus=$SLURM_NTASKS_PER_NODE --num_nodes=$SLURM_JOB_NUM_NODES --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \"$TRAIN_SCRIPT\" --deepspeed --deepspeed-config \"$CONFIG_FILE\" --model-name \"Qwen/Qwen2.5-1.5B-Instruct\" --steps 10
+        # Set CUDA_VISIBLE_DEVICES for this node's GPU
+        # Extract GPU number from node name for this specific task
+        if [[ \"\$SLURMD_NODENAME\" =~ ^node([0-9]+)\$ ]]; then
+            GPU_NUM=\${BASH_REMATCH[1]}
+        else
+            GPU_NUM=\$SLURM_LOCALID
+        fi
+        export CUDA_VISIBLE_DEVICES=\$GPU_NUM
+        echo \"[Node \$NODE] CUDA_VISIBLE_DEVICES: \$CUDA_VISIBLE_DEVICES\"
+        echo \"[Node \$NODE] SLURM_PROCID: \$SLURM_PROCID\"
+        echo \"[Node \$NODE] SLURM_NTASKS: \$SLURM_NTASKS\"
+        echo \"[Node \$NODE] Starting training...\"
+        # Run Python script directly - it will use SLURM env vars and deepspeed.initialize()
+        # Don't use deepspeed launcher, just run the script
+        python \"$TRAIN_SCRIPT\" --deepspeed --deepspeed-config \"$CONFIG_FILE\" --model-name \"Qwen/Qwen2.5-1.5B-Instruct\" --steps 10
     "
 
 echo ""
