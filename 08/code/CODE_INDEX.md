@@ -51,6 +51,48 @@ This directory contains all code examples from Chapter 8, configured for **Multi
   python checkpoint.py --checkpoint_dir ./checkpoints
   ```
 
+## Framework-Specific Examples
+
+### DeepSpeed (`deepspeed/`)
+- **Description**: DeepSpeed ZeRO-3 with CPU offload training example
+- **Files**: 
+  - `train.py` - Training script with DeepSpeed integration
+  - `run.slurm` - SLURM batch script
+  - `ds_zero3_offload.json` - DeepSpeed configuration
+  - `README.md` - Detailed documentation
+- **Features**:
+  - ZeRO-3 parameter sharding
+  - CPU offload for large models
+  - Automatic distributed setup
+  - Works with HuggingFace models
+- **Usage**: 
+  ```bash
+  cd deepspeed
+  mkdir -p logs
+  sbatch run.slurm
+  ```
+
+### Megatron-LM (`megatron/`)
+- **Description**: Megatron-LM GPT pretraining with SLURM
+- **Files**:
+  - `run.slurm` - SLURM batch script for Megatron training
+  - `README.md` - Detailed documentation
+- **Features**:
+  - Tensor, pipeline, and data parallelism support
+  - Multi-node training
+  - Mock data support for testing
+  - Configurable model size
+- **Prerequisites**:
+  - Megatron-LM repository installed
+  - Set `MEGATRON_PATH` environment variable
+- **Usage**:
+  ```bash
+  cd megatron
+  export MEGATRON_PATH=/path/to/megatron-lm
+  mkdir -p logs
+  sbatch run.slurm
+  ```
+
 ## Shell Scripts (SLURM Batch Jobs)
 
 ### 1. `train_ddp.sh`
@@ -149,6 +191,8 @@ sbatch train_distributed.sh
 | 3.2 Batch Jobs | `train_ddp.sh` |
 | 4.1 PyTorch DDP | `train_ddp.py`, `train_ddp.sh` |
 | 4.2 PyTorch FSDP | `train_fsdp.py`, `train_fsdp.sh` |
+| 4.3 DeepSpeed ZeRO-3 | `deepspeed/train.py`, `deepspeed/run.slurm` |
+| 4.4 Megatron-LM | `megatron/run.slurm` |
 | 5.1 Job Arrays | `train_array.sh` |
 | 5.4 Checkpointing | `checkpoint.py`, `train_distributed.sh` |
 | 9. Complete Workflow | `train_distributed.py`, `train_distributed.sh` |
