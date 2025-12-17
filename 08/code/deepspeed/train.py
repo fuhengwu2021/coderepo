@@ -175,6 +175,26 @@ def main():
             config=args.deepspeed_config
         )
         
+        # Workaround for DeepSpeed 0.18.3 bug: DeepSpeedZeRoOffload doesn't have
+        # overlapping_partition_gradients_reduce_epilogue() method, but engine tries to call it
+        # Add a no-op method if it doesn't exist
+        if not hasattr(optimizer, 'overlapping_partition_gradients_reduce_epilogue'):
+            def overlapping_partition_gradients_reduce_epilogue():
+                pass
+            optimizer.overlapping_partition_gradients_reduce_epilogue = overlapping_partition_gradients_reduce_epilogue
+            if model_engine.global_rank == 0:
+                print("WARNING: Patched missing overlapping_partition_gradients_reduce_epilogue() method")
+        
+        # Workaround for DeepSpeed 0.18.3 bug: checkpoint_engine can be None
+        # but step() tries to call checkpoint_engine.is_decoupled()
+        if model_engine.checkpoint_engine is None:
+            class MockCheckpointEngine:
+                def is_decoupled(self):
+                    return False
+            model_engine.checkpoint_engine = MockCheckpointEngine()
+            if model_engine.global_rank == 0:
+                print("WARNING: Patched missing checkpoint_engine")
+        
         if model_engine.global_rank == 0:
             print("=" * 60)
             print("DeepSpeed ZeRO-3 Initialization Complete")
