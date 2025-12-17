@@ -1,0 +1,722 @@
+我先按“能不能跑、约束是否真的有效、离 SGLang/X-Grammar 还有多远”这三个维度，评价你这 6 个文件；然后给出一套更接近 SGLang 思路的实现（可直接接入 HuggingFace generate 的 logits processor / prefix_allowed_tokens_fn），并附上基于 Qwen/Qwen2.5-0.5B-Instruct 的测试代码。
+
+一、对现有文件的评估（逐个）
+
+1. constraint_decoder.py（核心解码器）
+   主要问题（会影响正确性或可用性）：
+   A. HuggingFace 加载参数可能直接报错或行为不对：
+
+* AutoModelForCausalLM.from_pretrained 里device_map=device 也不符合预期（device_map 通常是 "auto" 或 dict），这段在很多环境会出问题。
+  B. “token string -> token id”的映射逻辑不可靠：
+* 你用 tokenizer.decode([id]) 作为“本步生成的 token 字符串”，再把它拿去驱动 FSM/PDA transition，这会被空格、特殊前缀、合并字符（BPE）严重干扰；对 Qwen 这类 tokenizer，terminal（比如 “{”）并不一定对应单一 token，而且可能出现前导空格变体。
+  C. 约束掩码的语义不严谨：
+* _get_valid_token_ids 会把 encode(token_str) 得到的多个 token id 全部加入 valid set，这等价于“允许这些子 token 单独出现”，会把约束放松到不正确的程度。
+  D. 性能问题（小模型也会慢）：
+* 每步都在 Python for 循环里构造 mask，并且可能遍历 token decode；这会显著拖慢 decode loop。
+
+结论：
+
+* 这个版本可以作为“演示型原型”，但距离 SGLang/X-Grammar 的“严格前缀约束 + tokenizer-aware + 高效 allowed-token 计算”差距较大；并且在 HF 参数层面存在明显的兼容性风险。
+
+2. constraint_decoding_v1.py（demo 脚本）
+   主要问题：
+   A. demo 覆盖面不错，但会暴露底层实现缺陷：
+
+* boolean demo 可能能跑，但 array/json demo 由于 FSM/Grammar 简化，实际很容易生成不合法 JSON（即便你做了 mask）。
+  B. “chars -> char chars / char 未定义”：
+* array_grammar_demo 里用到了 char、digit 等符号，但 grammar.py 并没有给出这些终结符集合的定义方式（只有把双引号括起来的当 terminal），所以这套规则本身并不能按你期望工作。
+
+结论：
+
+* demo 的意图对，但目前更像“想要的接口”，不是“能稳定证明约束正确性”的测试。
+
+3. grammar.py（CFG parser）
+   主要问题：
+   A. ε 处理方式不对：
+
+* 你把 ε 加成 rhs.append("")，但 GrammarRule 的“epsilon rule”在 FSM/PDA 里是通过 len(rule.rhs)==0 判断；因此 epsilon 永远不会被当作 epsilon。
+  B. requires_stack 的判定过于粗糙：
+* 只检查（近似）递归并不能判断“能否用 FSM”。绝大多数 CFG 并不能用 FSM 正确表达；SGLang/X-Grammar 也不是“CFG -> FSM”，而是“Grammar -> 可做前缀判定的自动机/解析器（tokenizer-aware）”。
+
+结论：
+
+* grammar.py 需要先修 epsilon，再明确你的 grammar 目标（EBNF/CFG/regex-like），否则上层自动机无法正确实现。
+
+4. fsm.py（FSM）
+   主要问题（本质性）：
+
+* 你把 CFG 的多符号 RHS 简化为“找第一个 terminal 就转移”，这不会得到正确语言；它只是一个“启发式 next-terminal 提示器”。
+
+结论：
+
+* 这个 FSM 不能作为严肃的 constraint decoding 后端；最多做 demo/heuristic。
+
+5. pda.py（PDA）
+   主要问题（本质性）：
+
+* PDA 构建逻辑也不是从 CFG 正规构造 PDA；目前的 transition/stack_ops 规则无法保证 language correctness。
+* valid_tokens_cache 也没有正确考虑 stack 状态。
+
+结论：
+
+* 目前 PDA 也不具备“严格约束”的语义。
+
+6. json_grammar.py
+   问题：
+
+* 依赖 parse_json_grammar（而 parse_json_grammar 里的 CFG 本身在当前框架下并不会被正确执行），所以 json_grammar.py 只是“包装壳”。
+
+总体结论（直说）：
+
+* 这套代码的最大结构性问题是：你想要的是 SGLang/X-Grammar 的“tokenizer-aware 前缀约束”，但当前实现是“CFG +（不正确的）FSM/PDA +（不严谨的）token 映射”。因此即便看起来在 mask token，它也很难做到严格正确的 structured decoding。
+
+二、更接近 SGLang 的实现路线（建议你直接换后端，不要修 FSM/PDA）
+
+SGLang/X-Grammar 这类约束解码，关键是两点：
+
+1. 前缀可行性（prefix validity）：当前已生成串 s，追加 token t 后的 s+t 是否仍然是某个合法输出的前缀。
+2. tokenizer-aware：必须基于“token 字节串/文本片段”做判断，而不是基于“你想象的字符 token”。
+
+在不引入 xgrammar / lark / 复杂 Earley 解析器的前提下，一个实用且“足够接近”的版本是：
+
+* 先只把目标定为：严格 JSON（语法正确，支持 object/array/string/number/bool/null，正确处理字符串转义与嵌套）
+* 用一个增量 JSON 前缀解析器（状态机 + 栈）来做 prefix validity
+* 在每步 decode 时，用 prefix_valid(s + token_text) 过滤 allowed token ids
+* 用 HuggingFace 的 LogitsProcessor 或 prefix_allowed_tokens_fn 接入 generate（而不是自己手写 sampling loop）
+
+下面给你一套可落地的实现（一个文件即可），并给出测试脚本。你可以把它放到你项目里当作 “constraint_decoder_v2_json.py” 和 “test_constraint_decoding_v2.py”。
+
+三、实现：JSON 前缀约束 + HF generate 接入（更接近 SGLang 的“allowed tokens”模式）
+
+文件 1：constraint_decoder_v2_json.py
+
+```python
+import math
+from dataclasses import dataclass
+from typing import List, Optional, Set, Dict
+
+import torch
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    LogitsProcessor,
+    LogitsProcessorList,
+)
+
+# ----------------------------
+# Incremental JSON prefix validator
+# ----------------------------
+
+@dataclass
+class JsonState:
+    # stack holds container context:
+    #   "OBJ_EXPECT_KEY_OR_END", "OBJ_EXPECT_COLON", "OBJ_EXPECT_VALUE",
+    #   "OBJ_EXPECT_COMMA_OR_END"
+    #   "ARR_EXPECT_VALUE_OR_END", "ARR_EXPECT_COMMA_OR_END"
+    stack: List[str]
+    in_string: bool
+    escaped: bool
+    # number parsing state
+    in_number: bool
+    # literals parsing: true/false/null
+    literal_target: Optional[str]
+    literal_pos: int
+    # whether we've completed a full top-level JSON value
+    done: bool
+
+def _is_ws(ch: str) -> bool:
+    return ch in " \t\r\n"
+
+def _is_digit(ch: str) -> bool:
+    return "0" <= ch <= "9"
+
+class IncrementalJsonPrefix:
+    """
+    A strict JSON prefix recognizer.
+
+    It answers: is text a valid prefix of some JSON value?
+    And whether it's already a complete JSON value (done=True).
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.state = JsonState(
+            stack=[],
+            in_string=False,
+            escaped=False,
+            in_number=False,
+            literal_target=None,
+            literal_pos=0,
+            done=False,
+        )
+
+    def clone_state(self) -> JsonState:
+        s = self.state
+        return JsonState(
+            stack=list(s.stack),
+            in_string=s.in_string,
+            escaped=s.escaped,
+            in_number=s.in_number,
+            literal_target=s.literal_target,
+            literal_pos=s.literal_pos,
+            done=s.done,
+        )
+
+    def _expecting_value(self, st: JsonState) -> bool:
+        if st.done:
+            return False
+        if not st.stack:
+            # top-level: if nothing produced yet, we expect a value;
+            # if a value completed, done becomes True.
+            return True
+        top = st.stack[-1]
+        return top in ("OBJ_EXPECT_VALUE", "ARR_EXPECT_VALUE_OR_END",)
+
+    def _expecting_key(self, st: JsonState) -> bool:
+        if not st.stack:
+            return False
+        return st.stack[-1] == "OBJ_EXPECT_KEY_OR_END"
+
+    def _push_object(self, st: JsonState) -> None:
+        st.stack.append("OBJ_EXPECT_KEY_OR_END")
+
+    def _push_array(self, st: JsonState) -> None:
+        st.stack.append("ARR_EXPECT_VALUE_OR_END")
+
+    def _finish_value(self, st: JsonState) -> None:
+        # called when a value is syntactically finished (outside strings/numbers/literals)
+        if not st.stack:
+            st.done = True
+            return
+        top = st.stack[-1]
+        if top == "OBJ_EXPECT_VALUE":
+            st.stack[-1] = "OBJ_EXPECT_COMMA_OR_END"
+        elif top == "ARR_EXPECT_VALUE_OR_END":
+            st.stack[-1] = "ARR_EXPECT_COMMA_OR_END"
+        else:
+            # should not happen if transitions are consistent
+            pass
+
+    def _start_literal(self, st: JsonState, target: str) -> None:
+        st.literal_target = target
+        st.literal_pos = 0
+
+    def _feed_literal(self, st: JsonState, ch: str) -> bool:
+        assert st.literal_target is not None
+        tgt = st.literal_target
+        pos = st.literal_pos
+        if pos >= len(tgt):
+            return False
+        if ch != tgt[pos]:
+            return False
+        st.literal_pos += 1
+        if st.literal_pos == len(tgt):
+            # literal completed
+            st.literal_target = None
+            st.literal_pos = 0
+            self._finish_value(st)
+        return True
+
+    def _start_number(self, st: JsonState, ch: str) -> bool:
+        # JSON number: -? (0|[1-9][0-9]*) (.[0-9]+)? ([eE][+-]?[0-9]+)?
+        # We implement a permissive-but-correct prefix DFA:
+        # allow prefixes that could still become valid.
+        st.in_number = True
+        st._num_phase = "START"  # type: ignore[attr-defined]
+        st._num_has_int = False  # type: ignore[attr-defined]
+        st._num_has_frac = False  # type: ignore[attr-defined]
+        st._num_has_exp = False  # type: ignore[attr-defined]
+        return self._feed_number(st, ch)
+
+    def _feed_number(self, st: JsonState, ch: str) -> bool:
+        phase = st._num_phase  # type: ignore[attr-defined]
+
+        if phase == "START":
+            if ch == "-":
+                st._num_phase = "SIGN"  # type: ignore[attr-defined]
+                return True
+            if _is_digit(ch):
+                st._num_phase = "INT"  # type: ignore[attr-defined]
+                st._num_has_int = True  # type: ignore[attr-defined]
+                st._num_int_leading_zero = (ch == "0")  # type: ignore[attr-defined]
+                return True
+            return False
+
+        if phase == "SIGN":
+            if _is_digit(ch):
+                st._num_phase = "INT"  # type: ignore[attr-defined]
+                st._num_has_int = True  # type: ignore[attr-defined]
+                st._num_int_leading_zero = (ch == "0")  # type: ignore[attr-defined]
+                return True
+            return False
+
+        if phase == "INT":
+            if _is_digit(ch):
+                if st._num_int_leading_zero:  # type: ignore[attr-defined]
+                    # "0" must not be followed by digits in int part
+                    return False
+                return True
+            if ch == ".":
+                st._num_phase = "DOT"  # type: ignore[attr-defined]
+                return True
+            if ch in "eE":
+                st._num_phase = "EXP"  # type: ignore[attr-defined]
+                st._num_has_exp = True  # type: ignore[attr-defined]
+                return True
+            # delimiter ends number
+            return False
+
+        if phase == "DOT":
+            if _is_digit(ch):
+                st._num_phase = "FRAC"  # type: ignore[attr-defined]
+                st._num_has_frac = True  # type: ignore[attr-defined]
+                return True
+            # must have at least one digit after dot
+            return False
+
+        if phase == "FRAC":
+            if _is_digit(ch):
+                return True
+            if ch in "eE":
+                st._num_phase = "EXP"  # type: ignore[attr-defined]
+                st._num_has_exp = True  # type: ignore[attr-defined]
+                return True
+            return False
+
+        if phase == "EXP":
+            if ch in "+-":
+                st._num_phase = "EXP_SIGN"  # type: ignore[attr-defined]
+                return True
+            if _is_digit(ch):
+                st._num_phase = "EXP_DIG"  # type: ignore[attr-defined]
+                return True
+            return False
+
+        if phase == "EXP_SIGN":
+            if _is_digit(ch):
+                st._num_phase = "EXP_DIG"  # type: ignore[attr-defined]
+                return True
+            return False
+
+        if phase == "EXP_DIG":
+            if _is_digit(ch):
+                return True
+            return False
+
+        return False
+
+    def _can_end_number(self, st: JsonState) -> bool:
+        if not st.in_number:
+            return False
+        phase = st._num_phase  # type: ignore[attr-defined]
+        # valid terminal phases: INT, FRAC, EXP_DIG
+        return phase in ("INT", "FRAC", "EXP_DIG")
+
+    def _end_number(self, st: JsonState) -> None:
+        st.in_number = False
+        # cleanup
+        for k in ["_num_phase", "_num_has_int", "_num_has_frac", "_num_has_exp", "_num_int_leading_zero"]:
+            if hasattr(st, k):
+                delattr(st, k)
+        self._finish_value(st)
+
+    def feed(self, text: str) -> bool:
+        """
+        Feed a chunk; returns whether the entire resulting text remains a valid JSON prefix.
+        """
+        st = self.state
+
+        for ch in text:
+            if st.done:
+                # after top-level done, only whitespace allowed
+                if _is_ws(ch):
+                    continue
+                return False
+
+            if st.in_string:
+                if st.escaped:
+                    st.escaped = False
+                    continue
+                if ch == "\\":
+                    st.escaped = True
+                    continue
+                if ch == '"':
+                    st.in_string = False
+                    self._finish_value(st)
+                    continue
+                # all other chars allowed in string (we skip strict control-char checks here)
+                continue
+
+            if st.literal_target is not None:
+                if not self._feed_literal(st, ch):
+                    return False
+                continue
+
+            if st.in_number:
+                # number continues if char fits; otherwise char must be a delimiter handled by outer logic
+                if self._feed_number(st, ch):
+                    continue
+                # delimiter: number can end here; then re-process this char as structural char
+                if not self._can_end_number(st):
+                    return False
+                self._end_number(st)
+                # fallthrough to structural processing for current ch
+
+            # outside string/literal/number: skip whitespace freely
+            if _is_ws(ch):
+                continue
+
+            # determine expectation by container
+            if st.stack:
+                top = st.stack[-1]
+                if top == "OBJ_EXPECT_KEY_OR_END":
+                    if ch == "}":
+                        st.stack.pop()
+                        self._finish_value(st)
+                        continue
+                    if ch == '"':
+                        st.in_string = True
+                        # after key string ends, we need colon
+                        st.stack[-1] = "OBJ_EXPECT_COLON"
+                        continue
+                    return False
+
+                if top == "OBJ_EXPECT_COLON":
+                    if ch == ":":
+                        st.stack[-1] = "OBJ_EXPECT_VALUE"
+                        continue
+                    return False
+
+                if top == "OBJ_EXPECT_VALUE":
+                    # parse a value
+                    if ch == "{":
+                        self._push_object(st)
+                        continue
+                    if ch == "[":
+                        self._push_array(st)
+                        continue
+                    if ch == '"':
+                        st.in_string = True
+                        continue
+                    if ch == "t":
+                        self._start_literal(st, "true")
+                        if not self._feed_literal(st, ch):
+                            return False
+                        continue
+                    if ch == "f":
+                        self._start_literal(st, "false")
+                        if not self._feed_literal(st, ch):
+                            return False
+                        continue
+                    if ch == "n":
+                        self._start_literal(st, "null")
+                        if not self._feed_literal(st, ch):
+                            return False
+                        continue
+                    if ch == "-" or _is_digit(ch):
+                        if not self._start_number(st, ch):
+                            return False
+                        continue
+                    return False
+
+                if top == "OBJ_EXPECT_COMMA_OR_END":
+                    if ch == ",":
+                        st.stack[-1] = "OBJ_EXPECT_KEY_OR_END"
+                        continue
+                    if ch == "}":
+                        st.stack.pop()
+                        self._finish_value(st)
+                        continue
+                    return False
+
+                if top == "ARR_EXPECT_VALUE_OR_END":
+                    if ch == "]":
+                        st.stack.pop()
+                        self._finish_value(st)
+                        continue
+                    # otherwise must be a value
+                    if ch == "{":
+                        self._push_object(st)
+                        continue
+                    if ch == "[":
+                        self._push_array(st)
+                        continue
+                    if ch == '"':
+                        st.in_string = True
+                        continue
+                    if ch == "t":
+                        self._start_literal(st, "true")
+                        if not self._feed_literal(st, ch):
+                            return False
+                        continue
+                    if ch == "f":
+                        self._start_literal(st, "false")
+                        if not self._feed_literal(st, ch):
+                            return False
+                        continue
+                    if ch == "n":
+                        self._start_literal(st, "null")
+                        if not self._feed_literal(st, ch):
+                            return False
+                        continue
+                    if ch == "-" or _is_digit(ch):
+                        if not self._start_number(st, ch):
+                            return False
+                        continue
+                    return False
+
+                if top == "ARR_EXPECT_COMMA_OR_END":
+                    if ch == ",":
+                        st.stack[-1] = "ARR_EXPECT_VALUE_OR_END"
+                        continue
+                    if ch == "]":
+                        st.stack.pop()
+                        self._finish_value(st)
+                        continue
+                    return False
+
+                return False
+
+            # top-level value
+            if ch == "{":
+                self._push_object(st)
+                continue
+            if ch == "[":
+                self._push_array(st)
+                continue
+            if ch == '"':
+                st.in_string = True
+                continue
+            if ch == "t":
+                self._start_literal(st, "true")
+                if not self._feed_literal(st, ch):
+                    return False
+                continue
+            if ch == "f":
+                self._start_literal(st, "false")
+                if not self._feed_literal(st, ch):
+                    return False
+                continue
+            if ch == "n":
+                self._start_literal(st, "null")
+                if not self._feed_literal(st, ch):
+                    return False
+                continue
+            if ch == "-" or _is_digit(ch):
+                if not self._start_number(st, ch):
+                    return False
+                continue
+
+            return False
+
+        return True
+
+    def is_complete_json(self) -> bool:
+        st = self.state
+        if st.in_string or st.escaped or st.literal_target is not None:
+            return False
+        if st.in_number:
+            # must be able to end number
+            return self._can_end_number(st) and not st.stack and st.done is False
+        return st.done
+
+
+# ----------------------------
+# HuggingFace LogitsProcessor for constrained decoding
+# ----------------------------
+
+class JsonConstraintLogitsProcessor(LogitsProcessor):
+    def __init__(self, tokenizer, prompt_len: int, max_candidates: int = 4096):
+        self.tokenizer = tokenizer
+        self.prompt_len = prompt_len
+        self.max_candidates = max_candidates
+
+        # cache token text for ids (convert_ids_to_tokens is often faster than decode)
+        self._id_to_text: Dict[int, str] = {}
+        self._prefix = IncrementalJsonPrefix()
+
+    def _token_text(self, tid: int) -> str:
+        if tid in self._id_to_text:
+            return self._id_to_text[tid]
+        # decode single token reliably as text piece
+        s = self.tokenizer.decode([tid], clean_up_tokenization_spaces=False, skip_special_tokens=False)
+        self._id_to_text[tid] = s
+        return s
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.FloatTensor:
+        # input_ids: [batch, seq]
+        # scores: [batch, vocab]
+        assert input_ids.shape[0] == 1, "This minimal processor supports batch=1 for clarity."
+        seq = input_ids[0].tolist()
+
+        gen_ids = seq[self.prompt_len:]
+        gen_text = self.tokenizer.decode(gen_ids, clean_up_tokenization_spaces=False, skip_special_tokens=False)
+
+        # rebuild prefix state from scratch (simple, correct; you can later optimize by incremental caching)
+        self._prefix.reset()
+        if not self._prefix.feed(gen_text):
+            # if we already violated prefix, block everything (forces failure fast)
+            scores[:] = -float("inf")
+            return scores
+
+        # shortlist candidates by top-k of current scores, then filter by prefix-valid
+        vocab = scores.shape[-1]
+        k = min(self.max_candidates, vocab)
+
+        topk_scores, topk_ids = torch.topk(scores[0], k=k, dim=-1)
+        allowed: List[int] = []
+
+        for tid in topk_ids.tolist():
+            piece = self._token_text(tid)
+            st_backup = self._prefix.clone_state()
+            ok = self._prefix.feed(piece)
+            self._prefix.state = st_backup
+            if ok:
+                allowed.append(tid)
+
+        if not allowed:
+            # nothing allowed in shortlist: fall back to allowing whitespace-ish tokens to escape dead-ends
+            # (optional; you can also hard fail)
+            for tid in topk_ids.tolist():
+                piece = self._token_text(tid)
+                if all((c.isspace() for c in piece)):
+                    allowed.append(tid)
+            if not allowed:
+                scores[:] = -float("inf")
+                return scores
+
+        # mask: keep allowed, set others to -inf
+        mask = torch.full_like(scores[0], fill_value=-float("inf"))
+        mask[allowed] = 0.0
+        scores[0] = scores[0] + mask
+        return scores
+
+
+# ----------------------------
+# User-facing constrained generator
+# ----------------------------
+
+class JsonConstrainedGenerator:
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-0.5B-Instruct", device: Optional[str] = None):
+        self.model_name = model_name
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=(torch.float16 if self.device.startswith("cuda") else torch.float32),
+        ).to(self.device)
+        self.model.eval()
+
+        # ensure pad token exists for generate
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    @torch.no_grad()
+    def generate_json(self, prompt: str, max_new_tokens: int = 128, temperature: float = 0.7, top_p: float = 0.9) -> str:
+        # chat template if available
+        if hasattr(self.tokenizer, "apply_chat_template") and getattr(self.tokenizer, "chat_template", None):
+            messages = [{"role": "user", "content": prompt}]
+            formatted = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            enc = self.tokenizer(formatted, return_tensors="pt", add_special_tokens=False)
+        else:
+            enc = self.tokenizer(prompt, return_tensors="pt")
+
+        enc = {k: v.to(self.device) for k, v in enc.items()}
+        prompt_len = enc["input_ids"].shape[1]
+
+        lp = LogitsProcessorList([JsonConstraintLogitsProcessor(self.tokenizer, prompt_len=prompt_len)])
+
+        out = self.model.generate(
+            **enc,
+            max_new_tokens=max_new_tokens,
+            do_sample=True,
+            temperature=temperature,
+            top_p=top_p,
+            logits_processor=lp,
+            pad_token_id=self.tokenizer.pad_token_id,
+            eos_token_id=self.tokenizer.eos_token_id,
+        )
+
+        gen_ids = out[0][prompt_len:].tolist()
+        text = self.tokenizer.decode(gen_ids, clean_up_tokenization_spaces=False, skip_special_tokens=True)
+        return text
+```
+
+这版和你当前 constraint_decoder.py 的关键差异是：
+
+* 不再假设“终结符 == token”，而是用“追加 token text 之后，整体字符串是否仍是合法 JSON 前缀”来定义 allowed tokens。
+* 直接接 HuggingFace generate 的 logits_processor，结构更接近 SGLang 里“每步给 allowed token 集合”的范式。
+* 这个实现目前 batch=1（便于清晰），你后续要扩成 batch 也不难。
+
+四、测试代码：用 Qwen/Qwen2.5-0.5B-Instruct 跑 3 个用例并校验 JSON
+
+文件 2：test_constraint_decoding_v2.py
+
+```python
+import json
+import time
+import torch
+
+from constraint_decoder_v2_json import JsonConstrainedGenerator
+
+def must_be_json(s: str):
+    # allow leading/trailing whitespace
+    obj = json.loads(s)
+    return obj
+
+def run_case(gen: JsonConstrainedGenerator, prompt: str, max_new_tokens=128):
+    t0 = time.time()
+    out = gen.generate_json(prompt, max_new_tokens=max_new_tokens, temperature=0.7, top_p=0.9)
+    dt = time.time() - t0
+
+    print("PROMPT:", prompt)
+    print("OUTPUT:", out)
+    print("TIME:", f"{dt:.2f}s")
+
+    obj = must_be_json(out)
+    print("PARSED TYPE:", type(obj))
+    print("-" * 80)
+    return obj
+
+def main():
+    gen = JsonConstrainedGenerator(model_name="Qwen/Qwen2.5-0.5B-Instruct")
+
+    # Case 1: simple object
+    run_case(gen, "Return ONLY a JSON object with fields name (string), age (number), city (string).")
+
+    # Case 2: array of strings
+    run_case(gen, "Return ONLY a JSON array of 3 city names as strings.")
+
+    # Case 3: nested structure
+    run_case(gen, "Return ONLY a JSON object {\"items\": [...], \"meta\": {...}} with 2 items. Each item has id (number) and tags (array of strings).")
+
+if __name__ == "__main__":
+    main()
+```
+
+五、如果你仍然想保留“通用 grammar”（不只 JSON），我建议你怎么改你现有工程
+
+如果目标是“接近 SGLang/X-Grammar 的通用 grammar 约束”，那 FSM/PDA 这条路不建议继续修补。更可行的两条路线：
+
+路线 A（最像 SGLang）：引入成熟的 grammar 引擎（xgrammar / outlines / llama.cpp grammar），把 grammar 编译成“可做 prefix acceptance 的自动机”，再对 tokenizer 做 trie 映射，生成 allowed token ids。
+
+路线 B（工程折中）：你只需要 JSON / JSON schema / function call 这几类结构化输出，那就用“结构化专用增量解析器”（像我上面给的 JSON 前缀解析器），再逐步加：
+
+* key 限制（要求必须出现某些 key）
+* value 类型限制（某 key 只能 string/number）
+* enum 限制（某 key 值只能来自集合）
+  这些都比“通用 CFG”更容易做到严格正确，而且性能更好。
+
+六、你现有代码里，最低成本必须修的点（即便你暂时不换后端）
+
+如果你要先让现有文件“至少不明显错”：
+
+1. grammar.py 把 epsilon 真正做成空 rhs（len(rhs)==0），否则 FSM/PDA 的 epsilon 分支永远不会触发。
+2. constraint_decoder.py 的 from_pretrained 参数改为 torch_dtype=...，device_map 用 "auto" 或者直接 .to(device)，否则兼容性很差。
+3. 禁止把 tokenizer.encode 得到的多个 ids 直接“全加入 allowed set”，这会从语义上破坏约束。
+4. 明确你的 terminal 定义：如果 terminal 是“字符”，那就必须做 tokenizer-aware 映射（prefix trie）；如果 terminal 是“token”，那 grammar 必须写成 token grammar，而不是字符 grammar。
+
+如果你愿意，我可以在你这 6 个文件的基础上给一个“最小改动 patch”版本：保留你 ConstraintDecoder 类的接口，但把内部 FSM/PDA 全替换为“前缀解析器后端”（JSON 或更通用的 regex/EBNF 子集），并把 generate loop 切换为 logits_processor（这样更接近 SGLang 的工作方式，也更容易做单元测试）。
