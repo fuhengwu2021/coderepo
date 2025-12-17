@@ -251,30 +251,37 @@ def demo_text_generation(device: torch.device, tp_size: int):
         print("="*60)
     
     # Generate text for each prompt
+    # IMPORTANT: All ranks must call generate() because TP requires all ranks to participate
+    # Only rank 0 will print the results
     results = []
     
-    if rank == 0:
-        with torch.inference_mode():
-            for i, prompt in enumerate(prompts):
+    with torch.inference_mode():
+        for i, prompt in enumerate(prompts):
+            if rank == 0:
                 print(f"\nPrompt {i+1}: {prompt}")
                 print("-" * 60)
-                
-                # Generate using hybrid TP model
-                generated_text = model.generate(
-                    tokenizer=tokenizer,
-                    prompt=prompt,
-                    max_new_tokens=50,
-                    do_sample=False,  # Greedy decoding for consistency
-                    temperature=1.0,
-                )
-                
+            
+            # All ranks must call generate (TP requires all ranks to participate in forward)
+            generated_text = model.generate(
+                tokenizer=tokenizer,
+                prompt=prompt,
+                max_new_tokens=50,
+                do_sample=False,  # Greedy decoding for consistency
+                temperature=1.0,
+            )
+            
+            # Only rank 0 processes and prints results
+            if rank == 0:
                 # Extract response (remove prompt)
                 response = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
                 
                 print(f"Response: {response}")
                 results.append((prompt, response))
+            
+            # Synchronize after each prompt
+            dist.barrier()
     
-    # Synchronize ranks
+    # Final synchronization
     dist.barrier()
     
     if rank == 0:

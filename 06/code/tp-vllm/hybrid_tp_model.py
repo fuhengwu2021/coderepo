@@ -8,6 +8,7 @@ This module implements a hybrid approach:
 """
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from typing import Optional, Tuple, List, Dict
 from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb
@@ -257,6 +258,14 @@ class HybridTPModel(nn.Module):
                 kv_cache=kv_caches[i],
             )
             kv_caches[i] = kv_cache
+            # Add progress output for debugging (only on rank 0, every 6 layers to reduce overhead)
+            if self.tp_rank == 0 and (i % 6 == 0 or i == self.num_layers - 1):
+                if i == self.num_layers - 1:
+                    print(f"    Layer {i+1}/{self.num_layers} done")
+                elif i == 0:
+                    print(f"    Layer {i+1}/{self.num_layers}...", end='', flush=True)
+                else:
+                    print(f" {i+1}/{self.num_layers}...", end='', flush=True)
         
         # Final norm (HF)
         hidden_states = self.norm(hidden_states)
@@ -308,10 +317,31 @@ class HybridTPModel(nn.Module):
         
         with torch.inference_mode():
             if rank == 0:
-                print(f"  Prefill: processing {input_ids.shape[1]} prompt tokens...")
+                print(f"  Prefill: processing {input_ids.shape[1]} prompt tokens through {self.num_layers} layers...")
             
             # Prefill: forward through model
-            logits = self.forward(input_ids)  # [batch, seq_len, vocab_size]
+            # This may take time, especially on first run (JIT compilation, etc.)
+            import time
+            start_time = time.time()
+            
+            try:
+                logits = self.forward(input_ids)  # [batch, seq_len, vocab_size]
+            except Exception as e:
+                if rank == 0:
+                    print(f"\n  Error during forward pass: {e}")
+                    import traceback
+                    traceback.print_exc()
+                raise
+            
+            elapsed = time.time() - start_time
+            
+            # Synchronize all ranks before printing
+            import torch.distributed as dist
+            if dist.is_initialized():
+                dist.barrier()
+            
+            if rank == 0:
+                print(f"\n  Prefill completed in {elapsed:.2f}s")
             
             # Get next token from last position
             next_token_logits = logits[0, -1, :]  # [vocab_size]
