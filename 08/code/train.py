@@ -11,12 +11,16 @@ Usage examples:
     srun -N 1 --gres=gpu:1 --cpus-per-task=4 python train.py
 
 2. Using srun with explicit task configuration:
-    srun -N 1 --gres=gpu:2 --ntasks-per-node=2 --cpus-per-task=4 python train.py
+    # For setups with 1 GPU per node (e.g., node6 and node7 each have 1 GPU):
     srun -N 2 --gres=gpu:1 --ntasks-per-node=1 --cpus-per-task=4 python train.py
+    # For setups with 2+ GPUs per node:
+    # srun -N 1 --gres=gpu:2 --ntasks-per-node=2 --cpus-per-task=4 python train.py
 
 3. Using torchrun (recommended):
-    srun -N 1 --gres=gpu:2 --cpus-per-task=4 torchrun --nproc_per_node=2 train.py
+    # For setups with 1 GPU per node:
     srun -N 2 --gres=gpu:1 --cpus-per-task=4 torchrun --nproc_per_node=1 --nnodes=2 train.py
+    # For setups with 2+ GPUs per node:
+    # srun -N 1 --gres=gpu:2 --cpus-per-task=4 torchrun --nproc_per_node=2 train.py
 
 4. Using sbatch with a batch script (see chapter8.md for examples)
 
