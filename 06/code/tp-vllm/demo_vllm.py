@@ -185,11 +185,12 @@ def demo_forward_pass(device: torch.device, tp_size: int):
     if dist.get_rank() == 0:
         print(f"Input shape: {hidden_states.shape}")
     
-    # Forward through attention
+    # Forward through attention (inference_mode at top level)
     with torch.inference_mode():
         attn_output, kv_cache = attn(hidden_states)
         if dist.get_rank() == 0:
             print(f"Attention output shape: {attn_output.shape}")
+            print(f"KV cache shapes: k={kv_cache[0].shape}, v={kv_cache[1].shape}")
         
         # Forward through MLP
         mlp_output = mlp(attn_output)

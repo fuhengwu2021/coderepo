@@ -18,19 +18,34 @@ def load_and_shard_state_dict(
     model_path: str,
     device: str = "cpu",
     dtype: Optional[torch.dtype] = None,
+    load_on_all_ranks: bool = True,
 ) -> Dict[str, torch.Tensor]:
     """
-    Load full model state dict from HuggingFace checkpoint.
+    Load model state dict from HuggingFace checkpoint.
+    
+    In production vLLM, only rank0 loads full weights, then broadcasts shards.
+    For simplicity, this implementation can load on all ranks (default) or
+    only on rank0 (if load_on_all_ranks=False).
     
     Args:
         model_path: Path to model (HuggingFace model name or local path)
         device: Device to load weights on
         dtype: Data type for weights (default: from model config)
+        load_on_all_ranks: If True, load full state_dict on all ranks (simpler but uses more memory).
+                          If False, only rank0 loads (more memory-efficient, requires broadcasting).
     
     Returns:
-        Full state dict with all weights
+        State dict with weights (full on rank0 if load_on_all_ranks=False, full on all ranks if True)
     """
     rank = get_tensor_model_parallel_rank()
+    tp_size = get_tensor_model_parallel_world_size()
+    
+    # Only load on rank0 if load_on_all_ranks=False
+    if not load_on_all_ranks and rank != 0:
+        if rank == 0:
+            print(f"Loading model weights from {model_path} (rank0 only)...")
+        return {}
+    
     if rank == 0:
         print(f"Loading model weights from {model_path}...")
     
@@ -60,11 +75,15 @@ def load_and_shard_state_dict(
         
         if model_files:
             # Load from safetensors
+            # TODO: In production, each rank could load only its shard by slicing
+            # For now, load full tensors (can be optimized later)
             state_dict = {}
             for f in model_files:
                 state_dict.update(load_file(f))
             if rank == 0:
                 print(f"Loaded {len(state_dict)} tensors from safetensors")
+                if not load_on_all_ranks:
+                    print(f"  Note: Only rank0 loaded full weights. Other ranks will receive shards via broadcast.")
         else:
             # Fallback to torch.load
             model = AutoModel.from_pretrained(
@@ -77,6 +96,8 @@ def load_and_shard_state_dict(
             torch.cuda.empty_cache() if torch.cuda.is_available() else None
             if rank == 0:
                 print(f"Loaded {len(state_dict)} tensors from PyTorch checkpoint")
+                if not load_on_all_ranks:
+                    print(f"  Note: Only rank0 loaded full weights. Other ranks will receive shards via broadcast.")
     except ImportError:
         # No safetensors, use torch.load
         model = AutoModel.from_pretrained(
@@ -89,6 +110,8 @@ def load_and_shard_state_dict(
         torch.cuda.empty_cache() if torch.cuda.is_available() else None
         if rank == 0:
             print(f"Loaded {len(state_dict)} tensors from PyTorch checkpoint")
+            if not load_on_all_ranks:
+                print(f"  Note: Only rank0 loaded full weights. Other ranks will receive shards via broadcast.")
     
     # Move to specified device
     if device != "cpu":

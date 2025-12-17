@@ -155,19 +155,18 @@ class ColumnParallelLinear(nn.Module):
             Output tensor of shape [..., output_size_per_partition] if gather_output=False
             or [..., output_size] if gather_output=True
         """
-        # Use inference_mode for better performance (no autograd)
-        with torch.inference_mode():
-            # Matrix multiply: F.linear does input_ @ weight.t()
-            # input_: [..., input_size]
-            # weight: [output_size_per_partition, input_size]
-            # output_parallel: [..., output_size_per_partition]
-            output_parallel = F.linear(input_, self.weight, self.bias)
-            
-            if self.gather_output and self.tp_size > 1:
-                # All-gather across the partitions
-                output = tensor_model_parallel_all_gather(output_parallel, dim=-1)
-            else:
-                output = output_parallel
+        # Matrix multiply: F.linear does input_ @ weight.t()
+        # input_: [..., input_size]
+        # weight: [output_size_per_partition, input_size]
+        # output_parallel: [..., output_size_per_partition]
+        # Note: inference_mode should be applied at the top level (demo/model), not here
+        output_parallel = F.linear(input_, self.weight, self.bias)
+        
+        if self.gather_output and self.tp_size > 1:
+            # All-gather across the partitions
+            output = tensor_model_parallel_all_gather(output_parallel, dim=-1)
+        else:
+            output = output_parallel
         
         return output
     
@@ -301,37 +300,36 @@ class RowParallelLinear(nn.Module):
         Returns:
             Output tensor of shape [..., output_size]
         """
-        # Use inference_mode for better performance (no autograd)
-        with torch.inference_mode():
-            if self.input_is_parallel:
-                input_parallel = input_
-            else:
-                # Split input along the last dimension
-                # input_: [..., input_size]
-                # Split into [..., input_size_per_partition] for each GPU
-                split_size = self.input_size_per_partition
-                start_idx = self.tp_rank * split_size
-                end_idx = start_idx + split_size
-                input_parallel = input_[..., start_idx:end_idx].contiguous()
-            
-            # Matrix multiply: F.linear does input_parallel @ weight.t()
-            # input_parallel: [..., input_size_per_partition]
-            # weight: [output_size, input_size_per_partition]
-            # output_parallel: [..., output_size]
-            # Only add bias on rank 0 to avoid adding it multiple times
-            # After all-reduce, all ranks will have the same result including bias
-            bias_to_use = self.bias if (self.bias is not None and self.tp_rank == 0) else None
-            output_parallel = F.linear(input_parallel, self.weight, bias_to_use)
-            
-            if self.reduce_results and self.tp_size > 1:
-                # All-reduce to sum partial results
-                # If bias was added on rank 0, it will be included in the sum
-                output = tensor_model_parallel_all_reduce(output_parallel)
-            else:
-                output = output_parallel
-                # If not reducing and bias wasn't added, add it now
-                if self.bias is not None and self.tp_rank != 0:
-                    output = output + self.bias
+        # Note: inference_mode should be applied at the top level (demo/model), not here
+        if self.input_is_parallel:
+            input_parallel = input_
+        else:
+            # Split input along the last dimension
+            # input_: [..., input_size]
+            # Split into [..., input_size_per_partition] for each GPU
+            split_size = self.input_size_per_partition
+            start_idx = self.tp_rank * split_size
+            end_idx = start_idx + split_size
+            input_parallel = input_[..., start_idx:end_idx].contiguous()
+        
+        # Matrix multiply: F.linear does input_parallel @ weight.t()
+        # input_parallel: [..., input_size_per_partition]
+        # weight: [output_size, input_size_per_partition]
+        # output_parallel: [..., output_size]
+        # Only add bias on rank 0 to avoid adding it multiple times
+        # After all-reduce, all ranks will have the same result including bias
+        bias_to_use = self.bias if (self.bias is not None and self.tp_rank == 0) else None
+        output_parallel = F.linear(input_parallel, self.weight, bias_to_use)
+        
+        if self.reduce_results and self.tp_size > 1:
+            # All-reduce to sum partial results
+            # If bias was added on rank 0, it will be included in the sum
+            output = tensor_model_parallel_all_reduce(output_parallel)
+        else:
+            output = output_parallel
+            # If not reducing and bias wasn't added, add it now
+            if self.bias is not None and self.tp_rank != 0:
+                output = output + self.bias
         
         return output
     
@@ -404,18 +402,16 @@ class QKVParallelLinear(ColumnParallelLinear):
             num_kv_heads_local = divide(total_num_kv_heads, tp_size)
             num_kv_head_replicas = 1
         
-        # Total output size: Q + K + V
-        # Q: num_heads_local * head_size * tp_size (total across all ranks)
-        # K: num_kv_heads_local * head_size * tp_size
-        # V: num_kv_heads_local * head_size * tp_size
-        output_size = (
-            (num_heads_local + 2 * num_kv_heads_local) * tp_size * head_size
-        )
+        # Global output size: Q + K + V (total across all ranks)
+        # This is the total output size before TP sharding
+        # ColumnParallelLinear will divide this by tp_size internally
+        global_output_size = (total_num_heads + 2 * total_num_kv_heads) * head_size
         
-        # Call parent constructor first (sets self.tp_size, self.tp_rank)
+        # Call parent constructor with global output size
+        # ColumnParallelLinear will divide by tp_size to get local output size
         super().__init__(
             input_size=hidden_size,
-            output_size=output_size,
+            output_size=global_output_size,
             bias=bias,
             gather_output=False,  # Never gather for QKV
             params_dtype=params_dtype,
@@ -426,9 +422,20 @@ class QKVParallelLinear(ColumnParallelLinear):
         self.num_kv_heads = num_kv_heads_local
         self.num_kv_head_replicas = num_kv_head_replicas
         
-        # Store output sizes for Q, K, V separately
+        # Store output sizes for Q, K, V separately (local per rank)
         self.q_size = self.num_heads * self.head_size
         self.kv_size = self.num_kv_heads * self.head_size
+        
+        # Verify that the weight shape matches expected local size
+        # After ColumnParallelLinear divides, we should have:
+        # weight.shape[0] == (num_heads_local + 2*num_kv_heads_local) * head_size
+        expected_local_output_size = (self.num_heads + 2 * self.num_kv_heads) * self.head_size
+        assert self.weight.shape[0] == expected_local_output_size, (
+            f"QKVParallelLinear weight shape mismatch: "
+            f"expected {expected_local_output_size}, got {self.weight.shape[0]}. "
+            f"num_heads_local={self.num_heads}, num_kv_heads_local={self.num_kv_heads}, "
+            f"head_size={self.head_size}"
+        )
     
     def _get_shard_offset_mapping(self, shard_id: str) -> int:
         """Get offset in output dimension for Q/K/V shard"""

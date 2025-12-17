@@ -118,34 +118,43 @@ class TensorParallelAttention(nn.Module):
         v = v.transpose(1, 2)
         
         # Handle KV cache for incremental decoding
+        # Keep separate k_kv/v_kv for storage (num_kv_heads_local)
+        # Only repeat for attention computation if needed
         if kv_cache is not None:
             k_cache, v_cache = kv_cache
-            # Concatenate with cache: [batch, num_kv_heads, cached_len + seq_len, head_dim]
-            k = torch.cat([k_cache, k], dim=2)
-            v = torch.cat([v_cache, v], dim=2)
+            # Concatenate with cache: [batch, num_kv_heads_local, cached_len + seq_len, head_dim]
+            k_kv = torch.cat([k_cache, k], dim=2)
+            v_kv = torch.cat([v_cache, v], dim=2)
+        else:
+            k_kv = k  # [batch, num_kv_heads_local, seq_len, head_dim]
+            v_kv = v  # [batch, num_kv_heads_local, seq_len, head_dim]
+        
+        # For GQA, we need to repeat K/V to match Q heads for attention computation
+        # But we keep k_kv/v_kv separate for cache storage
+        if self.num_kv_heads_local < self.num_heads_local:
+            repeat_factor = self.num_heads_local // self.num_kv_heads_local
+            k_for_attn = k_kv.repeat_interleave(repeat_factor, dim=1)
+            v_for_attn = v_kv.repeat_interleave(repeat_factor, dim=1)
+        else:
+            k_for_attn = k_kv
+            v_for_attn = v_kv
         
         # Compute attention scores: Q @ K^T
         # q: [batch, num_heads_local, seq_len, head_dim]
-        # k: [batch, num_kv_heads_local, cached_len, head_dim]
-        # For GQA, we need to repeat K/V to match Q heads
-        if self.num_kv_heads_local < self.num_heads_local:
-            repeat_factor = self.num_heads_local // self.num_kv_heads_local
-            k = k.repeat_interleave(repeat_factor, dim=1)
-            v = v.repeat_interleave(repeat_factor, dim=1)
-        
-        # Attention: [batch, num_heads_local, seq_len, cached_len]
-        scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        # k_for_attn: [batch, num_heads_local, cached_len, head_dim]
+        scores = torch.matmul(q, k_for_attn.transpose(-2, -1)) * self.scale
         
         # Apply causal mask if needed (for prefill)
+        # Use boolean mask with masked_fill to avoid NaN from 0 * -inf
         if kv_cache is None and seq_len > 1:
             causal_mask = torch.triu(
-                torch.ones(seq_len, seq_len, device=scores.device, dtype=scores.dtype),
+                torch.ones(seq_len, seq_len, device=scores.device, dtype=torch.bool),
                 diagonal=1
-            ) * float('-inf')
-            scores = scores + causal_mask.unsqueeze(0).unsqueeze(0)
+            )
+            scores = scores.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
         
         attn_weights = F.softmax(scores, dim=-1)
-        attn_output = torch.matmul(attn_weights, v)  # [batch, num_heads_local, seq_len, head_dim]
+        attn_output = torch.matmul(attn_weights, v_for_attn)  # [batch, num_heads_local, seq_len, head_dim]
         
         # Reshape for output projection: [batch, seq_len, num_heads_local * head_dim]
         attn_output = attn_output.transpose(1, 2).contiguous()
@@ -154,6 +163,6 @@ class TensorParallelAttention(nn.Module):
         # Output projection (row parallel, all-reduce happens inside)
         output = self.o_proj(attn_output)
         
-        # Return output and updated KV cache
-        return output, (k, v)
+        # Return output and updated KV cache (non-repeated version for storage)
+        return output, (k_kv, v_kv)
 
