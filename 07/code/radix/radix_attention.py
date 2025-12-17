@@ -8,9 +8,9 @@ import torch
 import torch.nn.functional as F
 from typing import Optional, Dict, List
 try:
-    from .radix_cache import RadixCache, RadixKey, MatchResult
+    from .radix_cache_v1 import RadixCache, RadixKey, MatchResult
 except ImportError:
-    from radix_cache import RadixCache, RadixKey, MatchResult
+    from radix_cache_v1 import RadixCache, RadixKey, MatchResult
 
 
 class RadixAttention:
