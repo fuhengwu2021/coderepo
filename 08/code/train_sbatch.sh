@@ -6,22 +6,39 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=50G
 #SBATCH --time=1:00:00
-#SBATCH --output=train_%j_%N.out
-#SBATCH --error=train_%j_%N.err
+#SBATCH --output=logs/train_%j_%N.out
+#SBATCH --error=logs/train_%j_%N.err
 
 # This script runs distributed training with train.py across 2 nodes (node6 and node7)
 # Each node gets 1 GPU, for a total of 2 GPUs
 #
 # Usage:
+#   mkdir -p logs  # Create logs directory before submitting
 #   sbatch train_sbatch.sh
 #
 # Logs:
+#   - Logs are written to the logs/ directory
 #   - Each node writes to separate log files:
-#     - train_<job_id>_node6.out/err (for node6, rank 0)
-#     - train_<job_id>_node7.out/err (for node7, rank 1)
-#   - View logs: tail -f train_<job_id>_node6.out
-#   - View all logs: tail -f train_<job_id>_*.out
+#     - logs/train_<job_id>_node6.out/err (for node6, rank 0)
+#     - logs/train_<job_id>_node7.out/err (for node7, rank 1)
+#   - View logs: tail -f logs/train_<job_id>_node6.out
+#   - View all logs: tail -f logs/train_<job_id>_*.out
 #   - srun output is prefixed with [rank<N>]: to identify which rank produced each line
+
+# Activate conda environment
+# Initialize conda (adjust path if needed)
+if [ -f ~/miniconda3/etc/profile.d/conda.sh ]; then
+    source ~/miniconda3/etc/profile.d/conda.sh
+elif [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
+    source ~/anaconda3/etc/profile.d/conda.sh
+fi
+conda activate research
+
+# Get the directory where this script is located and create logs directory
+# Use the actual script directory (where sbatch was submitted from)
+SCRIPT_DIR="/home/fuhwu/workspace/coderepo/08/code"
+cd "$SCRIPT_DIR"
+mkdir -p logs
 
 echo "=========================================="
 echo "Distributed Training with train.py"
@@ -33,6 +50,7 @@ echo "Tasks per node: $SLURM_NTASKS_PER_NODE"
 echo "Total tasks: $SLURM_NTASKS"
 echo "Node list: $SLURM_JOB_NODELIST"
 echo "Current node: $SLURMD_NODENAME"
+echo "Logs directory: $SCRIPT_DIR/logs"
 echo ""
 
 # Get master node address - use localhost for single-node multi-GPU setup
@@ -72,14 +90,26 @@ echo "Starting training on node $SLURMD_NODENAME (rank $RANK)..."
 echo "=========================================="
 echo ""
 
-# Get the directory where this script is located
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
 
 # Run distributed training using srun
 # Each rank will write to its own log file (train_<job_id>_<node_name>.out/err)
 # The --label option prefixes each line with [rank<N>]: to identify the source rank
-srun --label python train.py \
+# Use absolute path to train.py and --chdir to ensure correct working directory
+TRAIN_SCRIPT="$SCRIPT_DIR/train.py"
+echo "Script directory: $SCRIPT_DIR"
+echo "Train script path: $TRAIN_SCRIPT"
+echo "Verifying train.py exists:"
+ls -la "$TRAIN_SCRIPT" || echo "ERROR: train.py not found at $TRAIN_SCRIPT"
+echo ""
+
+# Use --chdir to change to script directory before running, and absolute path to train.py
+# Ensure conda environment is available for srun by using the full python path
+PYTHON_CMD=$(which python)
+echo "Python command: $PYTHON_CMD"
+echo "Python version: $($PYTHON_CMD --version)"
+echo ""
+
+srun --chdir="$SCRIPT_DIR" --label "$PYTHON_CMD" "$TRAIN_SCRIPT" \
     --epochs 10 \
     --batch-size 32 \
     --lr 0.001 \
