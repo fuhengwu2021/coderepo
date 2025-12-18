@@ -1,0 +1,225 @@
+"""
+vLLM API Gateway - 根据请求体中的 model 字段自动路由到对应的 vLLM Service
+"""
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+import httpx
+import json
+import logging
+from typing import Dict, Any
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="vLLM API Gateway")
+
+# 允许跨域
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Model 到 Service 的映射
+# 格式: {model_name_in_request: service_name}
+MODEL_TO_SERVICE = {
+    "meta-llama/Llama-3.2-1B-Instruct": "vllm-llama-32-1b",
+    "/models/Phi-tiny-MoE-instruct": "vllm-phi-tiny-moe-service",
+    "Phi-tiny-MoE-instruct": "vllm-phi-tiny-moe-service",  # 兼容不同的格式
+}
+
+# Service 端口（所有 Service 都使用 8000）
+SERVICE_PORT = 8000
+
+
+def get_service_for_model(model: str) -> str:
+    """根据 model 名称获取对应的 Service 名称"""
+    # 精确匹配
+    if model in MODEL_TO_SERVICE:
+        return MODEL_TO_SERVICE[model]
+    
+    # 模糊匹配（支持部分匹配）
+    for key, service in MODEL_TO_SERVICE.items():
+        if key.lower() in model.lower() or model.lower() in key.lower():
+            logger.info(f"Matched model '{model}' to service '{service}' via fuzzy match with '{key}'")
+            return service
+    
+    # 如果找不到，返回 None
+    return None
+
+
+async def forward_request(
+    service_name: str,
+    path: str,
+    method: str,
+    headers: Dict[str, str],
+    body: bytes = None,
+    params: Dict[str, Any] = None
+) -> httpx.Response:
+    """转发请求到对应的 Service"""
+    # 构建目标 URL
+    target_url = f"http://{service_name}:{SERVICE_PORT}{path}"
+    
+    # 移除一些不应该转发的 headers
+    forward_headers = {k: v for k, v in headers.items() 
+                      if k.lower() not in ['host', 'content-length']}
+    
+    logger.info(f"Forwarding {method} {path} to {target_url}")
+    
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        if method == "GET":
+            response = await client.get(target_url, headers=forward_headers, params=params)
+        elif method == "POST":
+            response = await client.post(
+                target_url,
+                headers=forward_headers,
+                content=body,
+                params=params
+            )
+        elif method == "DELETE":
+            response = await client.delete(target_url, headers=forward_headers)
+        else:
+            raise HTTPException(status_code=405, detail=f"Method {method} not supported")
+        
+        return response
+
+
+@app.get("/health")
+async def health():
+    """健康检查"""
+    return {"status": "healthy", "service": "vllm-api-gateway"}
+
+
+@app.get("/v1/models")
+async def list_models():
+    """列出所有可用的模型"""
+    models = []
+    for model_name, service_name in MODEL_TO_SERVICE.items():
+        try:
+            # 尝试从对应的 Service 获取模型信息
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"http://{service_name}:{SERVICE_PORT}/v1/models")
+                if response.status_code == 200:
+                    data = response.json()
+                    if "data" in data:
+                        models.extend(data["data"])
+        except Exception as e:
+            logger.warning(f"Failed to get models from {service_name}: {e}")
+            # 如果无法连接，至少返回模型名称
+            models.append({
+                "id": model_name,
+                "object": "model",
+                "created": 0,
+                "owned_by": "vllm"
+            })
+    
+    return {"object": "list", "data": models}
+
+
+@app.api_route("/v1/{path:path}", methods=["GET", "POST", "DELETE"])
+async def proxy_v1(request: Request, path: str):
+    """代理所有 /v1/* 请求"""
+    # 读取请求体
+    body = await request.body()
+    
+    # 解析请求体以获取 model 字段
+    model = None
+    if body:
+        try:
+            body_json = json.loads(body)
+            model = body_json.get("model")
+        except json.JSONDecodeError:
+            pass
+    
+    # 如果没有 model 字段，尝试从查询参数获取
+    if not model:
+        model = request.query_params.get("model")
+    
+    # 如果还是没有 model，返回错误
+    if not model:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing 'model' field in request body or query parameters"
+        )
+    
+    # 获取对应的 Service
+    service_name = get_service_for_model(model)
+    if not service_name:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{model}' not found. Available models: {list(MODEL_TO_SERVICE.keys())}"
+        )
+    
+    logger.info(f"Routing request for model '{model}' to service '{service_name}'")
+    
+    # 转发请求
+    try:
+        response = await forward_request(
+            service_name=service_name,
+            path=f"/v1/{path}",
+            method=request.method,
+            headers=dict(request.headers),
+            body=body,
+            params=dict(request.query_params)
+        )
+        
+        # 处理流式响应
+        if "text/event-stream" in response.headers.get("content-type", ""):
+            async def generate():
+                async for chunk in response.aiter_bytes():
+                    yield chunk
+            return StreamingResponse(generate(), media_type="text/event-stream")
+        
+        # 返回 JSON 响应
+        return JSONResponse(
+            content=response.json() if response.content else {},
+            status_code=response.status_code,
+            headers=dict(response.headers)
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Gateway timeout")
+    except httpx.ConnectError:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service '{service_name}' is not available. Please check if the pod is running."
+        )
+    except Exception as e:
+        logger.error(f"Error forwarding request: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "DELETE"])
+async def proxy_other(request: Request, path: str):
+    """代理其他路径的请求（如 /health, /metrics 等）"""
+    # 对于非 /v1/* 路径，尝试所有 Service（用于健康检查等）
+    # 或者返回 404
+    if path in ["health", "metrics"]:
+        # 尝试第一个可用的 Service
+        first_service = list(MODEL_TO_SERVICE.values())[0] if MODEL_TO_SERVICE else None
+        if first_service:
+            try:
+                response = await forward_request(
+                    service_name=first_service,
+                    path=f"/{path}",
+                    method=request.method,
+                    headers=dict(request.headers),
+                    body=await request.body(),
+                    params=dict(request.query_params)
+                )
+                return JSONResponse(
+                    content=response.json() if response.content else {},
+                    status_code=response.status_code
+                )
+            except:
+                pass
+    
+    raise HTTPException(status_code=404, detail=f"Path /{path} not found")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
