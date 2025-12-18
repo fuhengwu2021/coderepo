@@ -1,11 +1,25 @@
 #!/bin/bash
 # Test script for vLLM OpenAI-compatible API
+# 
+# Usage:
+#   ./test-api.sh [API_URL]
+# 
+# Examples:
+#   # 使用 API Gateway（自动路由）
+#   ./test-api.sh http://localhost:8000
+#   kubectl port-forward svc/vllm-api-gateway 8000:8000
+#   
+#   # 直接访问特定模型
+#   ./test-api.sh http://localhost:8001
+#   kubectl port-forward svc/vllm-llama-32-1b 8001:8000
 
 set -e
 
 API_URL="${1:-http://localhost:8000}"
 echo "Testing vLLM API at: $API_URL"
 echo "=================================="
+echo ""
+echo "💡 Tip: If using API Gateway, requests are automatically routed based on 'model' field in request body"
 echo ""
 
 # Test health
@@ -83,5 +97,33 @@ else
 fi
 echo ""
 
+echo ""
+echo "5. Testing different model (Phi-tiny-MoE) via Gateway..."
+echo "   POST $API_URL/v1/chat/completions"
+echo "   (This will be automatically routed to phi-tiny-moe service based on model field)"
+PHI_RESPONSE=$(curl --max-time 30 -s -w "\nHTTP_CODE:%{http_code}" "$API_URL/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "/models/Phi-tiny-MoE-instruct",
+    "messages": [
+      {"role": "user", "content": "What is a mixture of experts?"}
+    ],
+    "max_tokens": 50
+  }' || echo "HTTP_CODE:000")
+HTTP_CODE=$(echo "$PHI_RESPONSE" | grep "HTTP_CODE" | cut -d: -f2)
+BODY=$(echo "$PHI_RESPONSE" | grep -v "HTTP_CODE")
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "   ✅ Phi-tiny-MoE chat completion successful (routed automatically)"
+    echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
+else
+    echo "   ⚠️  Phi-tiny-MoE chat completion failed (HTTP $HTTP_CODE)"
+    echo "$BODY"
+fi
+echo ""
+
 echo "=================================="
 echo "Testing complete!"
+echo ""
+echo "📝 Note: API Gateway automatically routes requests based on 'model' field:"
+echo "   - 'meta-llama/Llama-3.2-1B-Instruct' → vllm-llama-32-1b"
+echo "   - '/models/Phi-tiny-MoE-instruct' → vllm-phi-tiny-moe-service"

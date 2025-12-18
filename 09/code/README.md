@@ -8,7 +8,11 @@ This directory contains code examples for building a complete production LLM ser
 09/code/
 ├── vllm/                    # vLLM 服务器部署配置
 │   ├── llama-3.2-1b.yaml    # Llama-3.2-1B-Instruct 模型部署（已部署）
+│   ├── phi-tiny-moe.yaml    # Phi-tiny-MoE-instruct 模型部署
+│   ├── api-gateway.yaml     # API Gateway 部署（自动路由）
+│   ├── api-gateway.py       # Gateway Python 代码（存储在 ConfigMap）
 │   ├── deploy-llama-3.2-1b.sh
+│   ├── deploy-gateway.sh    # Gateway 部署脚本
 │   ├── test-api.sh          # API 测试脚本
 │   └── README.md            # vLLM 部署文档
 └── *.py                     # Python 代码示例
@@ -59,7 +63,69 @@ k3d kubeconfig merge mycluster-gpu --kubeconfig-merge-default
 kubectl get nodes
 ```
 
-### 4. Configure Storage for k3d
+### 4. Add Additional Agent Node (Optional)
+
+If you need to run multiple models on different nodes for isolation, you can add more agent nodes:
+
+```bash
+# Add a new agent node (k3d node create doesn't support --gpus directly)
+# First create the node
+k3d node create agent-1 \
+  --cluster mycluster-gpu \
+  --role agent
+
+# Then manually reconfigure the container to add GPU support
+# Stop and remove the container
+docker stop k3d-agent-1-0
+docker rm k3d-agent-1-0
+
+# Recreate with GPU and volume support
+# Get the image ID first
+IMAGE_ID=$(docker images k3s-cuda:v1.33.6-cuda-12.2.0-working --format "{{.ID}}")
+
+docker run -d \
+  --name k3d-agent-1-0 \
+  --hostname k3d-agent-1-0 \
+  --network k3d-mycluster-gpu \
+  --privileged \
+  --tmpfs /run \
+  --tmpfs /var/run \
+  -e K3S_TOKEN=LmYHFPGciNataclGfjAI \
+  -e K3S_URL=https://k3d-mycluster-gpu-server-0:6443 \
+  -e K3S_KUBECONFIG_OUTPUT=/output/kubeconfig.yaml \
+  -v /raid/models:/models \
+  -v /home/fuhwu/workspace/distributedai/resources/vllm:/vllm \
+  --label k3d.cluster=mycluster-gpu \
+  --label k3d.role=agent \
+  --gpus all \
+  --restart unless-stopped \
+  $IMAGE_ID \
+  agent --with-node-id
+
+# Wait for node to be ready and GPU to be detected
+kubectl get nodes -w
+# Wait ~20-30 seconds for device plugin to detect GPU
+# Note: Node name will have a suffix (e.g., k3d-agent-1-0-56098497) due to --with-node-id
+NEW_NODE=$(kubectl get nodes -o json | jq -r '.items[] | select(.metadata.name | startswith("k3d-agent-1-0")) | .metadata.name' | head -1)
+kubectl get nodes $NEW_NODE -o json | jq -r '.status.capacity."nvidia.com/gpu"'
+```
+
+```
+ 🚀 $kubectl get nodes
+NAME                         STATUS   ROLES                  AGE     VERSION
+k3d-agent-1-0-56098497       Ready    <none>                 40s     v1.33.6+k3s1
+k3d-mycluster-gpu-agent-0    Ready    <none>                 7d21h   v1.33.6+k3s1
+k3d-mycluster-gpu-server-0   Ready    control-plane,master   7d21h   v1.33.6+k3s1
+```
+
+**Note:** 
+- Replace the `K3S_TOKEN` with your actual cluster token (get it from existing agent node: `docker inspect k3d-mycluster-gpu-agent-0 | jq -r '.[0].Config.Env[]' | grep K3S_TOKEN`).
+- Use the correct image ID if the image name doesn't work: `docker images k3s-cuda:v1.33.6-cuda-12.2.0-working --format "{{.ID}}"`.
+- **Important:** Add `--with-node-id` flag to the agent command to avoid "duplicate hostname" error.
+- After creating the container, wait ~20-30 seconds for the device plugin to detect and report GPU resources.
+- If GPU doesn't appear, check device plugin pod: `kubectl get pods -n kube-system | grep nvidia-device-plugin`.
+
+### 5. Configure Storage for k3d
 
 ```bash
 # Configure local-path-provisioner to use /raid/tmpdata
@@ -96,7 +162,7 @@ kubectl patch deployment local-path-provisioner -n kube-system --type json -p '[
 kubectl rollout restart deployment local-path-provisioner -n kube-system
 ```
 
-### 5. Set Up HuggingFace Token (for Gated Models)
+### 6. Set Up HuggingFace Token (for Gated Models)
 
 ```bash
 # Export HF_TOKEN environment variable
@@ -106,7 +172,7 @@ export HF_TOKEN='your_huggingface_token_here'
 echo $HF_TOKEN
 ```
 
-### 6. Deploy vLLM Model
+### 7. Deploy vLLM Model
 
 #### Option A: Using Deployment Script (Recommended)
 
@@ -131,7 +197,7 @@ kubectl apply -f vllm/llama-3.2-1b.yaml
 kubectl get pod vllm-llama-32-1b -w
 ```
 
-### 7. Test the Deployment
+### 8. Test the Deployment
 
 ```bash
 # Wait for pod to be ready
@@ -155,7 +221,110 @@ curl http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-### 8. Monitor and Debug
+### 9. Deploy API Gateway (Optional but Recommended)
+
+The API Gateway provides a unified entry point that automatically routes requests to the correct vLLM service based on the `model` field in the request body. This eliminates the need to know which service to call for each model.
+
+#### Why Use API Gateway?
+
+- **Unified Entry Point**: Single endpoint for all models
+- **Automatic Routing**: Routes requests based on `model` field in request body
+- **No GPU Required**: Gateway is lightweight and can run on any agent node
+- **Easy to Scale**: Add new models by updating the routing configuration
+
+#### Deployment Steps
+
+```bash
+cd vllm/
+
+# Option A: Using deployment script (Recommended)
+./deploy-gateway.sh
+
+# Option B: Manual deployment
+kubectl apply -f api-gateway.yaml
+
+# Wait for Gateway to be ready
+kubectl wait --for=condition=Ready pod/vllm-api-gateway --timeout=60s
+
+# Check Gateway status
+kubectl get pod,svc -l app=vllm-gateway
+```
+
+#### Gateway Configuration
+
+The Gateway automatically routes requests based on the `model` field. Current model mappings are defined in `api-gateway.py`:
+
+```python
+MODEL_TO_SERVICE = {
+    "meta-llama/Llama-3.2-1B-Instruct": "vllm-llama-32-1b",
+    "/models/Phi-tiny-MoE-instruct": "vllm-phi-tiny-moe-service",
+    "Phi-tiny-MoE-instruct": "vllm-phi-tiny-moe-service",
+}
+```
+
+To add a new model, simply update this mapping in `api-gateway.py` and redeploy.
+
+#### Testing Gateway
+
+```bash
+# Port forward Gateway
+kubectl port-forward svc/vllm-api-gateway 8000:8000
+
+# Test health endpoint
+curl http://localhost:8000/health
+
+# Test with automatic routing (Gateway will route to llama service)
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+
+# Test with different model (Gateway will route to phi-tiny-moe service)
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "/models/Phi-tiny-MoE-instruct",
+    "messages": [{"role": "user", "content": "What is a mixture of experts?"}]
+  }'
+
+# Or use the test script
+./test-api.sh http://localhost:8000
+```
+
+#### Gateway Architecture
+
+```
+Client Request
+    ↓
+API Gateway (统一入口)
+    ↓
+解析请求体中的 'model' 字段
+    ↓
+路由到对应的 Service
+    - "meta-llama/Llama-3.2-1B-Instruct" → vllm-llama-32-1b:8000
+    - "/models/Phi-tiny-MoE-instruct" → vllm-phi-tiny-moe-service:8000
+    ↓
+转发请求到对应的 vLLM Pod
+    ↓
+返回响应
+```
+
+#### Node Placement
+
+The Gateway is configured to run on **Agent nodes** (work nodes), not the control-plane node:
+
+- **Deployed on**: Agent nodes (via `nodeAffinity` excluding control-plane)
+- **Resource requirements**: Low (256Mi memory, 100m CPU)
+- **No GPU needed**: Gateway only forwards requests, doesn't run models
+- **Can share nodes**: Gateway can run alongside model pods on the same node
+
+Current deployment:
+- Gateway runs on `k3d-mycluster-gpu-agent-0` (same node as llama pod)
+- No need to create a dedicated node for Gateway
+
+### 10. Monitor and Debug
 
 ```bash
 # View pod logs

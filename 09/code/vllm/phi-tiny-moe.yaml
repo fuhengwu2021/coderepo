@@ -37,7 +37,7 @@ spec:
           python3 -m vllm.entrypoints.openai.api_server \
             --model /models/Phi-tiny-MoE-instruct \
             --host 0.0.0.0 \
-            --port 9876 \
+            --port 8000 \
             --tensor-parallel-size 1 \
             --gpu-memory-utilization 0.9
         env:
@@ -59,7 +59,7 @@ spec:
             nvidia.com/gpu: 1
             memory: 16Gi
         ports:
-        - containerPort: 9876
+        - containerPort: 8000
           name: http
         volumeMounts:
         - name: models
@@ -91,8 +91,8 @@ spec:
     app: vllm
     model: phi-tiny-moe
   ports:
-  - port: 9876
-    targetPort: 9876
+  - port: 8000
+    targetPort: 8000
     name: http
 ---
 apiVersion: v1
@@ -108,7 +108,7 @@ spec:
     app: vllm
     model: phi-tiny-moe
   ports:
-  - port: 9876
-    targetPort: 9876
+  - port: 8000
+    targetPort: 8000
     nodePort: 30081
     name: http
