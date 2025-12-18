@@ -148,11 +148,9 @@ vllm/
 ├── deploy-llama-3.2-1b.sh    # Llama deployment script
 ├── phi-tiny-moe.yaml          # Phi-tiny-MoE-instruct deployment
 ├── deploy-phi-tiny-moe.sh     # Phi-tiny-MoE deployment script
-├── api-gateway.yaml           # API Gateway deployment
-├── api-gateway.py             # Gateway Python code (stored in ConfigMap)
-├── deploy-gateway.sh          # Gateway deployment script
-├── test-api.sh                # API testing script
 └── README.md                  # This file
+
+Note: API Gateway files (api-gateway.yaml, api-gateway.py, deploy-gateway.sh, ingress files, etc.) have been moved to the parent code/ directory as they are generic and support both vLLM and SGLang.
 ```
 
 ## Additional Resources

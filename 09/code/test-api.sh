@@ -5,11 +5,11 @@
 #   ./test-api.sh [API_URL]
 # 
 # Examples:
-#   # 使用 API Gateway（自动路由）
+#   # Using API Gateway (automatic routing)
 #   ./test-api.sh http://localhost:8000
 #   kubectl port-forward svc/vllm-api-gateway 8000:8000
 #   
-#   # 直接访问特定模型
+#   # Direct access to specific model
 #   ./test-api.sh http://localhost:8001
 #   kubectl port-forward svc/vllm-llama-32-1b 8001:8000
 
@@ -59,7 +59,7 @@ COMPLETION_RESPONSE=$(curl --max-time 30 -s -w "\nHTTP_CODE:%{http_code}" "$API_
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
-    "prompt": "What is machine learning?",
+    "prompt": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?",
     "max_tokens": 50,
     "temperature": 0.7
   }' || echo "HTTP_CODE:000")
@@ -82,7 +82,7 @@ CHAT_RESPONSE=$(curl --max-time 30 -s -w "\nHTTP_CODE:%{http_code}" "$API_URL/v1
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
     "messages": [
-      {"role": "user", "content": "Hello! Can you explain what AI is in one sentence?"}
+      {"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}
     ],
     "max_tokens": 50
   }' || echo "HTTP_CODE:000")
@@ -106,7 +106,7 @@ PHI_RESPONSE=$(curl --max-time 30 -s -w "\nHTTP_CODE:%{http_code}" "$API_URL/v1/
   -d '{
     "model": "/models/Phi-tiny-MoE-instruct",
     "messages": [
-      {"role": "user", "content": "What is a mixture of experts?"}
+      {"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}
     ],
     "max_tokens": 50
   }' || echo "HTTP_CODE:000")
@@ -124,6 +124,7 @@ echo ""
 echo "=================================="
 echo "Testing complete!"
 echo ""
-echo "📝 Note: API Gateway automatically routes requests based on 'model' field:"
-echo "   - 'meta-llama/Llama-3.2-1B-Instruct' → vllm-llama-32-1b"
+echo "📝 Note: API Gateway automatically routes requests based on 'model' and 'owned_by' fields:"
+echo "   - 'meta-llama/Llama-3.2-1B-Instruct' with 'owned_by: vllm' → vllm-llama-32-1b"
+echo "   - 'meta-llama/Llama-3.2-1B-Instruct' with 'owned_by: sglang' → sglang-llama-32-1b"
 echo "   - '/models/Phi-tiny-MoE-instruct' → vllm-phi-tiny-moe-service"
