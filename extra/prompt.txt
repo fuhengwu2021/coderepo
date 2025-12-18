@@ -1,0 +1,30 @@
+
+
+Jingqiao Zhang  Yesterday at 5:19 PM
+Here are their requirements:
+Model: meta-llama/Llama-4-Scout-17B-16E-Instruct
+Context size: Varies between 10k tokens to 2M token request
+Concurrency: 50 requests
+Does anyone have bandwidth to test run if the latest vllm or sglang work for the following?
+Llama-4-Scout on 8x H200 with a max context length of 2M / 2097152
+6 replies
+Jingqiao Zhang  Yesterday at 5:20 PM
+Our previous results showed 1.5M max context length with 8xH200
+5:24
+This is from a new customer ask
+And, interestingly, I am seeing Brazil customers are using llama4 in 4 DACs with 10 replicas in total (cc @jingqzha @wwgao)
+Screenshot 2025-12-17 at 5.22.29 PM.png 
+
+5:25
+@vasheno   do you know if anyone have bandwidth?
+Varun Shenoy [Generative AI]  Yesterday at 5:28 PM
+@tejanand Can you pick it up? I can guide you with this.
+Unfortunately, most of the team is out already or are going out soon.
+Jingqiao Zhang  Yesterday at 5:31 PM
+Due to the time limitation, just focus on checking if sglang/vllm works for 2M context length.
+Just test 2M input length + 200 output length
+Tejesh Anand  Yesterday at 5:33 PM
+Sure I can take it
+
+
+use conda env research
