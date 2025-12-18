@@ -44,7 +44,7 @@ echo "   POST $API_URL/v1/completions"
 COMPLETION_RESPONSE=$(curl --max-time 30 -s -w "\nHTTP_CODE:%{http_code}" "$API_URL/v1/completions" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "/models/Phi-tiny-MoE-instruct",
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
     "prompt": "What is machine learning?",
     "max_tokens": 50,
     "temperature": 0.7
@@ -66,7 +66,7 @@ echo "   POST $API_URL/v1/chat/completions"
 CHAT_RESPONSE=$(curl --max-time 30 -s -w "\nHTTP_CODE:%{http_code}" "$API_URL/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "/models/Phi-tiny-MoE-instruct",
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
     "messages": [
       {"role": "user", "content": "Hello! Can you explain what AI is in one sentence?"}
     ],

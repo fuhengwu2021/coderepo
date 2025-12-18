@@ -31,7 +31,7 @@ fi
 
 # Apply deployment
 echo "Applying vLLM deployment..."
-kubectl apply -f "$(dirname "$0")/vllm-phi-tiny-moe.yaml"
+kubectl apply -f "$(dirname "$0")/phi-tiny-moe.yaml"
 
 # Wait for deployment
 echo "Waiting for pod to be ready (this may take several minutes for model loading)..."
