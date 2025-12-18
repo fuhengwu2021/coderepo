@@ -5,7 +5,6 @@ from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_decoder_block_spec,
     get_gpt_layer_local_spec,
     get_gpt_layer_with_transformer_engine_spec,
-    get_gpt_layer_with_inference_spec,
     get_gpt_mtp_block_spec,
 )
 from megatron.core.models.gpt.heterogeneous.heterogeneous_layer_specs import (
@@ -122,10 +121,16 @@ def _get_transformer_layer_spec(use_te, config):
             use_kitchen=config.use_kitchen,
         )
     elif config.transformer_impl == "inference_optimized":
-        return get_gpt_layer_with_inference_spec(
+        # Fallback to local spec if inference_optimized spec is not available
+        # This may happen with older/newer versions of megatron-core
+        return get_gpt_layer_local_spec(
+            args.num_experts,
+            args.moe_grouped_gemm,
             args.qk_layernorm,
             args.multi_latent_attention,
-            qk_l2_norm=args.qk_l2_norm,
+            moe_use_legacy_grouped_gemm=args.moe_use_legacy_grouped_gemm,
+            normalization=args.normalization,
+            use_kitchen=config.use_kitchen,
         )
     else:
         return get_gpt_layer_local_spec(

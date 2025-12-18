@@ -34,6 +34,17 @@ conda activate research || {
     exit 1
 }
 
+# Get Python path from activated environment
+PYTHON_PATH=$(which python)
+if [ -z "$PYTHON_PATH" ]; then
+    echo "ERROR: Python not found in conda environment 'research'"
+    exit 1
+fi
+
+echo "Using Python: $PYTHON_PATH"
+echo "Python version: $($PYTHON_PATH --version)"
+echo ""
+
 # Get the directory where this script is located
 SCRIPT_DIR="${SLURM_SUBMIT_DIR:-$(dirname "$(readlink -f "$0")")}"
 cd "$SCRIPT_DIR"
@@ -72,12 +83,25 @@ echo ""
 
 # --------- Distributed training setup ---------
 # Get master node address from SLURM
-export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+# For virtual nodes (node6, node7, etc.) on same physical node, use localhost
+# This avoids IPv6 resolution warnings
+MASTER_HOSTNAME=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+if [ "$SLURM_JOB_NUM_NODES" -eq 1 ] || [[ "$MASTER_HOSTNAME" =~ ^node[0-9]+$ ]]; then
+    # Single physical node or virtual nodes - use localhost
+    export MASTER_ADDR=127.0.0.1
+else
+    # True multi-node setup - resolve hostname to IPv4 address
+    export MASTER_ADDR=$(getent hosts "$MASTER_HOSTNAME" | awk '{print $1}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+    # Fallback to hostname if resolution fails
+    if [ -z "$MASTER_ADDR" ]; then
+        export MASTER_ADDR="$MASTER_HOSTNAME"
+    fi
+fi
 export MASTER_PORT=${MASTER_PORT:-6000}
 export WORLD_SIZE=$SLURM_NTASKS
 
 # NCCL settings
-export NCCL_DEBUG=WARN
+export NCCL_DEBUG=WARN  # Set to INFO for more details
 export NCCL_SOCKET_IFNAME=^docker,lo
 export NCCL_IB_DISABLE=0  # Enable InfiniBand if available
 export CUDA_DEVICE_MAX_CONNECTIONS=1
@@ -101,6 +125,42 @@ echo ""
 
 echo "GPU information:"
 srun nvidia-smi --query-gpu=index,name,memory.total,memory.used --format=csv,noheader
+echo ""
+
+# Check Megatron installation
+echo "Checking Megatron installation:"
+echo "Python path: $PYTHON_PATH"
+$PYTHON_PATH -c "import megatron; print('megatron package: OK')" 2>/dev/null || {
+    echo "ERROR: megatron package not found"
+    exit 1
+}
+$PYTHON_PATH -c "from megatron.core import parallel_state; print('megatron.core: OK')" 2>/dev/null || {
+    echo "ERROR: megatron.core module not found"
+    echo "Install with: pip install megatron-core"
+    exit 1
+}
+$PYTHON_PATH -c "import megatron.training; print('megatron.training: OK')" 2>/dev/null || {
+    echo "WARNING: megatron.training module not found"
+    echo ""
+    echo "NOTE: megatron.training is NOT part of megatron-core package."
+    echo "You need to install the full Megatron-LM from source:"
+    echo ""
+    echo "  1. Clone the repository:"
+    echo "     git clone https://github.com/NVIDIA/Megatron-LM.git"
+    echo "     cd Megatron-LM"
+    echo ""
+    echo "  2. Install in editable mode:"
+    echo "     conda activate research"
+    echo "     pip install -e ."
+    echo ""
+    echo "  OR install with build isolation disabled:"
+    echo "     pip install --no-build-isolation .[mlm,dev]"
+    echo ""
+    echo "The megatron.training module will be available after installation."
+    echo ""
+    echo "Attempting to continue anyway (may fail if training module is required)..."
+    echo ""
+}
 echo ""
 
 # --------- Training configuration ---------
@@ -197,6 +257,7 @@ TRAINING_ARGS=(
     --calculate-per-token-loss
     --manual-gc
     --empty-unused-memory-level 1
+    --no-gradient-accumulation-fusion  # Disable gradient accumulation fusion (requires APEX CUDA extensions)
 )
 
 # Model parallelism arguments
@@ -262,6 +323,15 @@ echo "Starting Megatron training..."
 echo "=========================================="
 echo ""
 
+# Create a wrapper command that activates conda on each compute node
+# This ensures conda environment is available when srun launches processes
+CONDA_INIT_CMD=""
+if [ -f ~/miniconda3/etc/profile.d/conda.sh ]; then
+    CONDA_INIT_CMD="source ~/miniconda3/etc/profile.d/conda.sh"
+elif [ -f ~/anaconda3/etc/profile.d/conda.sh ]; then
+    CONDA_INIT_CMD="source ~/anaconda3/etc/profile.d/conda.sh"
+fi
+
 # Build the complete command with all arguments
 # Convert arrays to space-separated strings for passing to bash -c
 MODEL_ARGS_STR="${MODEL_ARGS[*]}"
@@ -276,10 +346,9 @@ srun --chdir="$SCRIPT_DIR" --label \
     bash -c "
         NODE=\$(hostname)
         echo \"[Node \$NODE] Activating conda environment...\"
-        source ~/miniconda3/etc/profile.d/conda.sh 2>/dev/null || \
-            source ~/anaconda3/etc/profile.d/conda.sh 2>/dev/null
+        $CONDA_INIT_CMD || echo \"[Node \$NODE] WARNING: Conda init failed\"
         conda activate research || {
-            echo \"[Node \$NODE] ERROR: Failed to activate conda environment\"
+            echo \"[Node \$NODE] ERROR: Failed to activate conda environment research\"
             exit 1
         }
         
@@ -292,6 +361,15 @@ srun --chdir="$SCRIPT_DIR" --label \
         export CUDA_VISIBLE_DEVICES=\$GPU_NUM
         export LOCAL_RANK=\$SLURM_LOCALID
         export RANK=\$SLURM_PROCID
+        # Ensure IPv4 for network operations (same as deepspeed)
+        export NCCL_SOCKET_IFNAME=^docker,lo
+        # Set GLOO_SOCKET_IFNAME to actual interface (Gloo doesn't support ^ syntax)
+        # Auto-detect first non-docker, non-lo interface for Gloo
+        GLOO_IF=\$(ip -o link show | grep -v docker | grep -v lo | head -1 | awk '{print \$2}' | sed 's/:$//')
+        if [ -n \"\$GLOO_IF\" ]; then
+            export GLOO_SOCKET_IFNAME=\$GLOO_IF
+            echo \"[Node \$NODE] GLOO_SOCKET_IFNAME: \$GLOO_SOCKET_IFNAME\"
+        fi
         
         echo \"[Node \$NODE] CUDA_VISIBLE_DEVICES: \$CUDA_VISIBLE_DEVICES\"
         echo \"[Node \$NODE] RANK: \$RANK, LOCAL_RANK: \$LOCAL_RANK\"
@@ -300,9 +378,26 @@ srun --chdir="$SCRIPT_DIR" --label \
         # Change to script directory (where pretrain_gpt.py is located)
         cd \"$SCRIPT_DIR\"
         
+        # Get Python command from activated conda environment
+        PYTHON_CMD=\$(which python)
+        if [ -z \"\$PYTHON_CMD\" ]; then
+            echo \"[Node \$NODE] ERROR: Python not found in conda environment\"
+            exit 1
+        fi
+        
+        # Ensure Megatron-LM is in Python path (for editable install)
+        # Add Megatron-LM directory to PYTHONPATH if it exists
+        if [ -d \"/home/fuhwu/workspace/coderepo/Megatron-LM\" ]; then
+            export PYTHONPATH=\"/home/fuhwu/workspace/coderepo/Megatron-LM:\$PYTHONPATH\"
+        fi
+        
         # Launch training with torchrun
         # For multi-node single-GPU setup, each node runs one process
         # torchrun handles distributed initialization
+        # Debug: Print training args to verify --no-gradient-accumulation-fusion is included
+        if [ \"\$RANK\" -eq 0 ]; then
+            echo \"[Node \$NODE] Training args: $TRAINING_ARGS_STR\"
+        fi
         torchrun \
             --nproc_per_node=1 \
             --nnodes=\$SLURM_JOB_NUM_NODES \
