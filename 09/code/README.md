@@ -395,6 +395,101 @@ MODEL_TO_SERVICE = {
 
 To add a new model, simply update this mapping in `api-gateway.py` and redeploy.
 
+#### Production Deployment: Exposing Gateway to External Access
+
+For production environments, expose the Gateway service using Ingress for production-grade access with TLS and domain names.
+
+**Prerequisites:**
+```bash
+# Install Nginx Ingress Controller (if not already installed)
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+
+# For k3d, use the k3d-specific ingress
+kubectl apply -f https://raw.githubusercontent.com/k3d-io/k3d/main/docs/usage/examples/ingress/ingress.yaml
+```
+
+**Create Ingress Resource:**
+
+Create `vllm/ingress.yaml`:
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vllm-api-gateway-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"  # Set to true with TLS
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vllm-api-gateway
+            port:
+              number: 8000
+```
+
+**Deploy:**
+```bash
+kubectl apply -f vllm/ingress.yaml
+
+# Access via localhost (HTTP)
+curl http://localhost/v1/models
+```
+
+**With TLS (Production):**
+
+For production environments with TLS enabled, use HTTPS:
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vllm-api-gateway-ingress
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"  # If using cert-manager
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - localhost
+    secretName: vllm-api-tls
+  rules:
+  - host: localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: vllm-api-gateway
+            port:
+              number: 8000
+```
+
+**Deploy with TLS:**
+```bash
+kubectl apply -f vllm/ingress.yaml
+
+# Access via HTTPS (if TLS is configured)
+curl https://localhost/v1/models --insecure  # Use --insecure for self-signed certs
+# Or with proper certificate validation:
+curl https://localhost/v1/models --cacert /path/to/ca.crt
+```
+
+**Note:** For localhost, TLS is typically not necessary. Use HTTP for local development. TLS is recommended for production environments with real domains.
+
 #### Testing Gateway
 
 ```bash
