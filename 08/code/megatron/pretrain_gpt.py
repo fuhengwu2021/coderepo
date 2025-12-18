@@ -6,6 +6,7 @@ from functools import partial
 from typing import List, Optional, Tuple
 
 import torch
+import torch.distributed as dist
 
 from gpt_builders import gpt_builder
 from megatron.core import parallel_state
@@ -257,12 +258,17 @@ if __name__ == "__main__":
     # Optionally enable inprocess restart on pretrain
     pretrain, store = inprocess_restart.maybe_wrap_for_inprocess_restart(pretrain)
 
-    pretrain(
-        train_valid_test_datasets_provider,
-        partial(model_provider, gpt_builder),
-        ModelType.encoder_or_decoder,
-        forward_step,
-        args_defaults={'tokenizer_type': 'GPT2BPETokenizer'},
-        extra_args_provider=add_modelopt_args if has_nvidia_modelopt else None,
-        store=store,
-    )
+    try:
+        pretrain(
+            train_valid_test_datasets_provider,
+            partial(model_provider, gpt_builder),
+            ModelType.encoder_or_decoder,
+            forward_step,
+            args_defaults={'tokenizer_type': 'GPT2BPETokenizer'},
+            extra_args_provider=add_modelopt_args if has_nvidia_modelopt else None,
+            store=store,
+        )
+    finally:
+        # Clean up distributed process group to avoid resource leaks
+        if dist.is_initialized():
+            dist.destroy_process_group()
