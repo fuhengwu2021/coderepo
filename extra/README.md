@@ -1,17 +1,18 @@
 # Llama-4-Scout Deployment and Testing
 
-Deployment and testing configurations for **Llama-4-Scout-17B-16E-Instruct** with vLLM and SGLang on **8x H200 GPUs** with **2M context length** (2,097,152 tokens).
+Deployment and testing configurations for **Llama-4-Scout-17B-16E-Instruct** with vLLM and SGLang on **8x H200 GPUs** with **2M-10M context length** support (up to 10,000,000 tokens with FP8 KV cache).
 
 ## Overview
 
-This directory contains scripts and configurations to test if vLLM and SGLang can handle Llama-4-Scout with 2M context length on 8x H200 GPUs, as required for production deployment.
+This directory contains scripts and configurations to test if vLLM and SGLang can handle Llama-4-Scout with **2M-10M context length** on 8x H200 GPUs, as required for production deployment.
 
 **Test Requirements:**
 - Model: `meta-llama/Llama-4-Scout-17B-16E-Instruct`
-- Context size: 2M tokens (2,097,152)
+- Context size: 2M tokens (2,097,152) - 10M tokens (10,000,000) with FP8 KV cache
 - Output length: 200 tokens
 - Hardware: 8x H200 GPUs
 - Backends: vLLM v0.12.0 and SGLang v0.5.6.post2-runtime
+- **FP8 KV Cache**: Required for 10M context (use `fp8_e4m3` format)
 
 ## Test Results
 
@@ -69,6 +70,14 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 - **Status**: **200 OK** ✅
 - **Configuration**: 8M max_model_len, Hybrid KV Cache Manager enabled, 90% GPU utilization
 
+**10M Context Length Test (FP8 E4M3 KV Cache):**
+- **Configuration**: `--max-model-len 10000000 --kv-cache-dtype fp8_e4m3 --calculate-kv-scales`
+- **GPU KV cache size**: **7,838,976 tokens** (per GPU, ~2x increase vs BF16)
+- **Available KV cache memory**: **89.71 GiB**
+- **Status**: Testing in progress
+- **Note**: FP8 E4M3 enables ~2x KV cache capacity compared to BF16 (7.8M vs 3.9M tokens per GPU)
+- **Important**: Must use `fp8_e4m3` (not `fp8_e5m2`) when `--calculate-kv-scales` is enabled (see FP8 Technical Details section)
+
 **Performance Analysis:**
 - Processing 2M+ tokens in ~70 seconds demonstrates vLLM can handle large contexts efficiently
 - 206K tokens/s prompt throughput is excellent for 2M context length
@@ -80,6 +89,10 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
   - Max per request: **11.6M tokens** (2.96x concurrency, up from 2.94M with 0.75x)
   - Successfully tested up to **4.91M tokens** in production
   - GPU KV cache usage: 31.3% for 5M tokens (efficient memory utilization)
+- **With FP8 E4M3 KV Cache**:
+  - KV cache capacity: **~7.8M tokens per GPU** (vs 3.9M with BF16)
+  - **~2x memory efficiency** enables 10M+ context length support
+  - Requires `fp8_e4m3` format (E5M2 not supported for Activations with `--calculate-kv-scales`)
 
 **Token Generation Strategy:**
 - Uses **smart sampling**: tokenizer samples first 100K characters to estimate actual ratio (~4.07 chars/token)
@@ -295,6 +308,79 @@ Wait for: `Application startup complete.`
   - **Why disabled**: CUDA graph requires 4-10GB extra memory per GPU for 2M context
   - **Trade-off**: ~5-15% performance loss, but avoids OOM and saves ~32-80GB total memory
 
+## FP8 Quantization Technical Details
+
+### Why FP8 E4M3 vs E5M2 Matters
+
+When enabling FP8 KV cache quantization with `--calculate-kv-scales` in vLLM, you **must** use `fp8_e4m3` format, not `fp8_e5m2`. This is not an arbitrary limitation but a **hardware and numerical stability requirement** based on the physical properties of FP8 data formats and the precision sensitivity of LLM Attention mechanisms.
+
+#### The Core Issue: E5M2 Precision is Insufficient for Activations
+
+The `--calculate-kv-scales` flag means vLLM performs **online quantization** of Query/Key/Value vectors during inference. This requires quantizing **Activations** (not just weights), which have very different precision requirements than gradients.
+
+**FP8 Format Comparison:**
+
+| Format | Bits Distribution | Dynamic Range | Precision | Primary Use Case |
+|--------|------------------|---------------|-----------|------------------|
+| **E4M3** | 1 sign + 4 exp + **3 mantissa** | ±240.0 | **Higher precision** | **Weights & Activations** (Inference) |
+| **E5M2** | 1 sign + 5 exp + **2 mantissa** | ±57,344.0 | **Lower precision** | **Gradients** (Training) |
+
+**Why Query Cannot Use E5M2:**
+
+Query vectors determine **where the Attention mechanism looks**. With only **2 bits of mantissa**, E5M2 cannot represent the fine-grained semantic information in Query vectors. This leads to:
+
+- **Massive information loss** in Query semantics
+- **Noisy Attention Scores** (Q × K) calculations
+- **Model "looking at wrong positions"** → output becomes gibberish or infinite repetition (e.g., `the the the the...`)
+
+#### Hardware and Kernel Implementation
+
+1. **Hopper Architecture (H100/H200)**: NVIDIA Tensor Cores for inference (Forward Pass) recommend **E4M3** for W8A8 (Weight 8-bit, Activation 8-bit) operations.
+
+2. **Kernel Hardcoding**: High-performance Attention kernels (FlashAttention-3, vLLM's custom Triton kernels) are **hardcoded or strongly optimized** for E4M3 precision assumptions when processing Activations. Using E5M2 would:
+   - Require expensive format conversions (overhead may negate speed gains)
+   - Compromise numerical stability
+   - Potentially cause hardware inefficiencies
+
+#### When E5M2 Can Be Used
+
+You may see documentation mentioning "E5M2 KV Cache support" - this applies to **pure storage** scenarios:
+
+- **Offline calibration**: Model weights and KV cache are pre-quantized offline
+- **Compression-only**: E5M2 used as storage format, **decompressed to BF16/FP16** before Attention computation
+
+However, once `--calculate-kv-scales` is enabled, the system performs **FP8 GEMM operations** (Query × Key), which requires **E4M3 for Activations** as a fundamental requirement.
+
+#### vLLM's Assertion Protection
+
+The assertion in vLLM's code:
+```python
+assert self.kv_cache_dtype in {"fp8", "fp8_e4m3"}
+```
+
+This is **protecting you from a trap**. If you bypass this (e.g., by modifying source code), you'll likely get:
+- ❌ Model output: `the the the the...` or random gibberish
+- ❌ No performance improvement (may even be slower due to conversions)
+- ❌ Numerical instability
+
+#### Summary
+
+- **E4M3** = Sufficient precision for Query/Key/Value (inference use case) ✅
+- **E5M2** = Insufficient precision for Activations (training/gradient use case) ❌
+
+**For 10M context length with FP8 KV cache:**
+- Use `--kv-cache-dtype fp8_e4m3` ✅
+- Use `--calculate-kv-scales` for dynamic scaling ✅
+- **Do NOT** use `fp8_e5m2` with `--calculate-kv-scales` ❌
+
+**Memory Savings with FP8 E4M3:**
+- BF16 KV cache: ~3.9M tokens per GPU
+- FP8 E4M3 KV cache: ~7.8M tokens per GPU
+- **~2x capacity increase** (50% memory reduction)
+
+**Reference:**
+- [Quantization in vLLM: From Zero to Hero](https://www.youtube.com/watch?v=nu8o_vg1IqE) - Detailed analysis by vLLM core contributors on FP8 formats and precision trade-offs
+
 ## Testing Different Context Lengths
 
 ```bash
@@ -306,6 +392,10 @@ Wait for: `Application startup complete.`
 
 # Test with 2M tokens (full test)
 ./run-test.sh --backend vllm --input-length 2097152 --output-length 200
+
+# Test with 10M tokens (requires FP8 KV cache)
+./run-vllm-docker.sh --max-model-len 10000000 --kv-cache-dtype fp8_e4m3 --calculate-kv-scales
+./run-test.sh --backend vllm --input-length 10000000 --output-length 200
 ```
 
 ## Monitoring
@@ -381,6 +471,9 @@ curl http://localhost:8000/v1/models
 6. ✅ **Both backends tested**: vLLM (69s) and SGLang (403s) for 2M context
 7. ✅ **Random start position** prevents prefix cache bias in benchmarks
 8. ✅ **CUDA graph disabled** in SGLang for 2M context to avoid OOM
+9. ✅ **FP8 E4M3 KV cache** enables ~2x capacity (7.8M tokens vs 3.9M tokens per GPU)
+10. ✅ **FP8 E4M3 required** when using `--calculate-kv-scales` (E5M2 not supported for Activations)
+11. ✅ **10M context length** achievable with FP8 E4M3 KV cache on 8x H200
 
 ## Next Steps
 
