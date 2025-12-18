@@ -347,9 +347,16 @@ VLLM_ALLOW_CHUNKED_LOCAL_ATTN_WITH_HYBRID_KV_CACHE=1
 - **5M 配置**: 保守使用 5-6M tokens per request，最大支持 11.6M tokens per request
 - **8M 配置**: 单个请求最大 8M tokens，并发能力 1.86x
 - **已验证成功**: 
-  - 5M 配置: 4.91M tokens ✅
-  - 8M 配置: 6.5M tokens 测试中...
+  - 5M 配置: 4.91M tokens ✅ (490K tokens/s throughput, 31.3% KV cache usage)
+  - 8M 配置: 6.38M tokens ✅ (637K tokens/s throughput, 40.8% KV cache usage)
 - **理论极限**: 10.84M - 12.29M tokens（取决于配置优化，但受 `max_model_len` 限制）
+
+**6.5M tokens 测试结果（8M 配置）：**
+- **实际处理**: 6,378,187 prompt tokens + 200 output tokens
+- **Prompt throughput**: **637,856.3 tokens/s**（比 5M 配置的 490K tokens/s 提升了 30%）
+- **GPU KV cache usage**: **40.8%**（比 5M 配置的 31.3% 略高，但仍很高效）
+- **Prefix cache hit rate**: 0.0%（随机起始位置，无缓存命中）
+- **结论**: 8M 配置下，vLLM 可以高效处理 6.5M tokens，吞吐量甚至比 5M 配置更高
 
 **关键发现：**
 - Hybrid Manager 启用后，理论极限从 **2.94M** 提升到 **11.6M tokens**（**+294.7%**）

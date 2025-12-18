@@ -59,13 +59,22 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 - **Max concurrency**: **1.86x** (for 8M tokens per request)
 - **Configuration**: Hybrid KV Cache Manager enabled, `--shm-size 128g`, `OMP_NUM_THREADS=8`
 - **Note**: Concurrency decreased from 2.96x (5M config) to 1.86x (8M config) because larger `max_model_len` requires more KV cache reservation per request
-- **6.5M tokens test**: Running...
+
+**6.5M Context Length Test (8M max_model_len configuration, Hybrid Manager enabled):**
+- ✅ Successfully processed **6.38M tokens input** + 200 tokens output
+- **Prompt throughput**: **637,856.3 tokens/s** (outstanding performance!)
+- **Generation throughput**: **1.7 tokens/s**
+- **GPU KV cache usage**: **40.8%** (during processing)
+- **Prefix cache hit rate**: **0.0%** (random start position, no cache hits)
+- **Status**: **200 OK** ✅
+- **Configuration**: 8M max_model_len, Hybrid KV Cache Manager enabled, 90% GPU utilization
 
 **Performance Analysis:**
 - Processing 2M+ tokens in ~70 seconds demonstrates vLLM can handle large contexts efficiently
 - 206K tokens/s prompt throughput is excellent for 2M context length
 - **284K tokens/s prompt throughput** for 2.9M context shows excellent scalability
 - **490K tokens/s prompt throughput** for 5M context with Hybrid Manager enabled shows outstanding performance
+- **637K tokens/s prompt throughput** for 6.5M context demonstrates exceptional scalability and efficiency
 - Prefix cache (30.2% hit rate in 2M test) helps optimize repeated content processing
 - **With Hybrid KV Cache Manager enabled**:
   - Max per request: **11.6M tokens** (2.96x concurrency, up from 2.94M with 0.75x)
@@ -96,6 +105,7 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 - Context Length: 2,097,152 tokens
 - Memory Fraction Static: 0.80
 - CUDA Graph: Disabled (to avoid OOM with 2M context)
+- **HiCache (Hierarchical Cache)**: **Not enabled** (can be enabled with `--enable-hierarchical-cache --hicache-ratio 2.0` to support up to 10M tokens on 8xH200)
 
 **Test Results:**
 - ✅ Successfully processed **2.097M tokens input** + 200 tokens output
@@ -184,6 +194,10 @@ For **2M context length** with Llama-4-Scout-17B-16E-Instruct:
 ### Kubernetes Deployment
 - `vllm-llama-4-scout.yaml` - Kubernetes config for vLLM
 - `sglang-llama-4-scout.yaml` - Kubernetes config for SGLang
+
+### Documentation
+- `HYBRID_KV_CACHE_ANALYSIS.md` - Detailed analysis of vLLM's Hybrid KV Cache Manager
+- `SGLANG_HYBRID_KV_CACHE.md` - Analysis of SGLang's Hybrid KV Cache support
 - `deploy-vllm-llama-4-scout.sh` - Kubernetes deployment script for vLLM
 - `deploy-sglang-llama-4-scout.sh` - Kubernetes deployment script for SGLang
 

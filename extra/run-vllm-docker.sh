@@ -2,18 +2,110 @@
 # Run vLLM Llama-4-Scout-17B-16E-Instruct with Docker
 # Configuration: 8x H200, 2M context length (2097152 tokens)
 # Local Docker run (no Kubernetes)
+#
+# Usage:
+#   ./run-vllm-docker.sh [OPTIONS]
+#
+# Options:
+#   --max-model-len <num>          Maximum model length in tokens (default: 8388608)
+#   --kv-cache-dtype <dtype>       KV cache dtype: auto, fp8, fp8_e4m3, fp8_e5m2 (default: auto)
+#   --gpu-memory-utilization <num> GPU memory utilization 0.0-1.0 (default: 0.90)
+#   --calculate-kv-scales          Enable dynamic KV scale calculation for FP8
+#   --tensor-parallel-size <num>   Tensor parallel size (default: 8)
+#   --port <num>                   Server port (default: 8000)
+#   --help                         Show this help message
+#
+# 使用示例 (Examples):
+#
+# 1. 默认配置（8M context）:
+#    ./run-vllm-docker.sh
+#
+# 2. 启用 FP8 KV Cache 支持 10M context:
+#    ./run-vllm-docker.sh \
+#      --max-model-len 10000000 \
+#      --kv-cache-dtype fp8_e5m2
+#
+# 3. 启用 FP8 并动态计算缩放因子:
+#    ./run-vllm-docker.sh \
+#      --max-model-len 10000000 \
+#      --kv-cache-dtype fp8_e5m2 \
+#      --calculate-kv-scales
+#
+# 4. 调整 GPU 内存利用率:
+#    ./run-vllm-docker.sh \
+#      --max-model-len 8388608 \
+#      --gpu-memory-utilization 0.95
+#
+# 5. 完整配置示例（10M + FP8）:
+#    ./run-vllm-docker.sh \
+#      --max-model-len 10000000 \
+#      --kv-cache-dtype fp8_e5m2 \
+#      --gpu-memory-utilization 0.90 \
+#      --calculate-kv-scales
+#
+# 6. 查看帮助信息:
+#    ./run-vllm-docker.sh --help
 
 set -e
 
-# Use HuggingFace model ID - vLLM will resolve from HF_HOME cache
-# The model is already cached, so it won't try to download
+# Default values
 MODEL_ID="meta-llama/Llama-4-Scout-17B-16E-Instruct"
 CONTAINER_NAME="vllm-llama-4-scout"
 PORT=8000
 IMAGE="vllm/vllm-openai:v0.12.0"
+MAX_MODEL_LEN=8388608
+KV_CACHE_DTYPE="auto"
+GPU_MEMORY_UTILIZATION=0.90
+TENSOR_PARALLEL_SIZE=8
+CALCULATE_KV_SCALES=false
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --max-model-len)
+            MAX_MODEL_LEN="$2"
+            shift 2
+            ;;
+        --kv-cache-dtype)
+            KV_CACHE_DTYPE="$2"
+            shift 2
+            ;;
+        --gpu-memory-utilization)
+            GPU_MEMORY_UTILIZATION="$2"
+            shift 2
+            ;;
+        --calculate-kv-scales)
+            CALCULATE_KV_SCALES=true
+            shift
+            ;;
+        --tensor-parallel-size)
+            TENSOR_PARALLEL_SIZE="$2"
+            shift 2
+            ;;
+        --port)
+            PORT="$2"
+            shift 2
+            ;;
+        --help)
+            grep -A 20 "^# Usage:" "$0" | head -20
+            exit 0
+            ;;
+        *)
+            echo "❌ Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
 
 echo "=== Run vLLM Llama-4-Scout-17B-16E-Instruct with Docker ==="
-echo "Configuration: 8x H200, 2M context length (2097152 tokens)"
+echo "Configuration:"
+echo "  - Model: ${MODEL_ID}"
+echo "  - Max model len: ${MAX_MODEL_LEN} tokens"
+echo "  - KV cache dtype: ${KV_CACHE_DTYPE}"
+echo "  - GPU memory utilization: ${GPU_MEMORY_UTILIZATION}"
+echo "  - Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
+echo "  - Calculate KV scales: ${CALCULATE_KV_SCALES}"
 echo ""
 
 # Check if container already exists
@@ -86,9 +178,11 @@ docker run -d \
     --model ${MODEL_ID} \
     --host 0.0.0.0 \
     --port 8000 \
-    --tensor-parallel-size 8 \
-    --max-model-len 8388608 \
-    --gpu-memory-utilization 0.90 \
+    --tensor-parallel-size ${TENSOR_PARALLEL_SIZE} \
+    --max-model-len ${MAX_MODEL_LEN} \
+    --gpu-memory-utilization ${GPU_MEMORY_UTILIZATION} \
+    --kv-cache-dtype ${KV_CACHE_DTYPE} \
+    $([ "$CALCULATE_KV_SCALES" = true ] && echo "--calculate-kv-scales") \
     --trust-remote-code
 
 if [ $? -eq 0 ]; then
@@ -109,8 +203,12 @@ if [ $? -eq 0 ]; then
     echo "🔗 Access service:"
     echo "   curl http://localhost:${PORT}/health"
     echo ""
-    echo "🧪 Test with 2M context + 200 output:"
+    echo "🧪 Test examples:"
+    echo "   # Test with 2M context:"
     echo "   ./run-test.sh --backend vllm --input-length 2097152 --output-length 200"
+    echo ""
+    echo "   # Test with 10M context (if configured):"
+    echo "   ./run-test.sh --backend vllm --input-length 10000000 --output-length 200"
     echo ""
     echo "⏳ Waiting for service to be ready (this may take several minutes)..."
     echo "   Check logs with: docker logs -f ${CONTAINER_NAME}"
