@@ -22,3 +22,4 @@ spec:
             name: vllm-api-gateway
             port:
               number: 8000
+

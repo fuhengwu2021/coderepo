@@ -100,3 +100,4 @@ echo "需要确保 Traefik 能正确路由到 NGINX Ingress Controller"
 echo ""
 echo "或者，最简单的方法："
 echo "  使用 NodePort 访问: curl -k -H 'Host: localhost' https://localhost:31965/health"
+

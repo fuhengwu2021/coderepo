@@ -104,3 +104,4 @@ echo "     kubectl apply -f vllm/ingress-tls.yaml"
 echo ""
 echo "  4. 测试访问:"
 echo "     curl -k https://localhost/health"
+

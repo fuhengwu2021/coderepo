@@ -26,3 +26,4 @@ fi
 # Start port-forward
 echo "🚀 Starting port-forward..."
 kubectl port-forward -n $NAMESPACE svc/$SERVICE $PORT:443
+
