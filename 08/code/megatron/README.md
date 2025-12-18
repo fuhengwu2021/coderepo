@@ -15,26 +15,28 @@ Megatron-LM is NVIDIA's framework for training large language models with tensor
 
 1. **Megatron-LM Installation**: 
    
-   **Option 1: Install megatron-core from PyPI (Recommended)**
+   **Important**: The PyPI package `megatron-core` only includes `megatron.core`, **NOT** `megatron.training`.
+   Since `pretrain_gpt.py` requires `megatron.training`, you **must install from source**.
+   
+   **Install from source (Required)**
    ```bash
    conda activate research
-   pip install --no-build-isolation megatron-core[mlm,dev]
-   ```
-   
-   This installs the core library (`megatron.core` and `megatron.training`) which provides
-   the distributed training framework. The training script (`pretrain_gpt.py`) and helper
-   files (`gpt_builders.py`, `model_provider.py`) are already included in this directory.
-   
-   **Option 2: Install from source (if you need latest features)**
-   ```bash
    git clone https://github.com/NVIDIA/Megatron-LM.git
    cd Megatron-LM
    pip install --no-build-isolation .[mlm,dev]
    ```
    
+   This installs:
+   - `megatron.core` - Core library (parallelism, models, etc.)
+   - `megatron.training` - Training utilities (required by `pretrain_gpt.py`)
+   - All dependencies
+   
    **Note**: This example includes `pretrain_gpt.py`, `gpt_builders.py`, and `model_provider.py` 
-   from the Megatron-LM repository, so you can use Option 1 (pip install) without cloning the 
-   full repository. The script will work as long as `megatron-core` is installed.
+   from the Megatron-LM repository. However, these scripts still require `megatron.training` 
+   to be installed, which is only available when installing from source.
+   
+   **Alternative**: If you want to build a package that includes `megatron.training`, see 
+   `BUILD_PACKAGE.md` for instructions on modifying `pyproject.toml`.
 
 2. **SLURM Cluster**: 
    - Multi-node setup with at least 2 nodes
