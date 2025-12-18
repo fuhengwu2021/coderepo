@@ -82,6 +82,8 @@ docker run -d \
     --port 8000 \
     --tp 8 \
     --context-length 2097152 \
+    --mem-fraction-static 0.80 \
+    --disable-cuda-graph \
     --trust-remote-code
 
 if [ $? -eq 0 ]; then

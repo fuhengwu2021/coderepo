@@ -39,14 +39,60 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 **Token Generation Strategy:**
 - Uses **smart sampling**: tokenizer samples first 100K characters to estimate actual ratio (~4.07 chars/token)
 - Uses sampled ratio directly (no buffer) to avoid exceeding 2M limit
+- **Random starting position**: Each test starts at a random position in the text file to avoid prefix caching
+  - This ensures fair performance comparison between runs
+  - Prevents cache hits from affecting benchmark results
 - Actual result: **2,065,427 tokens** (slightly over 2M by ~3%, server accepts with small tolerance)
 - The server supports 2M context length as configured (`--max-model-len 2097152`)
 - **Smart sampling is optimal**: 
   - Fast: only samples 100K chars (takes ~1-2 seconds)
   - Accurate: uses actual tokenizer ratio
   - Safe: avoids significantly exceeding 2M limit
+  - Fair: random start position prevents cache bias
 
 **Conclusion:** vLLM v0.12.0 **works** for Llama-4-Scout with 2M context length on 8x H200.
+
+### ✅ SGLang v0.5.6.post2-runtime - SUCCESS
+
+**Configuration:**
+- Image: `lmsysorg/sglang:v0.5.6.post2-runtime`
+- Tensor Parallel Size: 8
+- Context Length: 2,097,152 tokens
+- Memory Fraction Static: 0.80
+- CUDA Graph: Disabled (to avoid OOM with 2M context)
+
+**Test Results:**
+- ✅ Successfully processed **2.097M tokens input** + 200 tokens output
+- **Response time**: **403.07 seconds** (~6.7 minutes) for 2.097M tokens + 200 output
+- **Output length**: 792 characters
+- **Status**: **200 OK** ✅
+
+**Performance Analysis:**
+- Processing 2M+ tokens in ~6.7 minutes demonstrates SGLang can handle large contexts
+- Slower than vLLM (403s vs 69s), but still functional
+- No OOM errors with CUDA graph disabled
+- Successfully completed the full 2M context test
+
+**Token Generation Strategy:**
+- Uses **smart sampling** with **random starting position** to avoid prefix caching
+- Random start position ensures fair performance comparison (no cache advantage)
+- Same strategy as vLLM for consistency
+- Actual result: **2,097,151 tokens** (exactly at target)
+
+**Conclusion:** SGLang v0.5.6.post2-runtime **works** for Llama-4-Scout with 2M context length on 8x H200, but is slower than vLLM.
+
+### Performance Comparison
+
+| Backend | Version | Input Tokens | Response Time | Throughput (est.) | Status |
+|---------|---------|--------------|---------------|-------------------|--------|
+| **vLLM** | v0.12.0 | 2.07M | **69.35s** | ~30K tokens/s | ✅ |
+| **SGLang** | v0.5.6.post2-runtime | 2.097M | **403.07s** | ~5.2K tokens/s | ✅ |
+
+**Key Observations:**
+- **vLLM is ~5.8x faster** for 2M context processing
+- Both backends successfully handle 2M context without OOM
+- vLLM shows better prompt throughput (206K tokens/s reported)
+- SGLang requires CUDA graph disabled for 2M context (memory constraint)
 
 ## Model Path
 
@@ -85,6 +131,9 @@ For **2M context length** with Llama-4-Scout-17B-16E-Instruct:
 
 ### Testing
 - `test_llama4_scout.py` - Test script for 2M context + 200 output tokens
+  - Uses **shared prompt generation** for fair comparison between vLLM and SGLang
+  - **Random starting position** to avoid prefix cache bias
+  - Smart token sampling for accurate token counting
 - `load_llama4_scout.py` - Direct model loading script
 - `run-test.sh` - Wrapper script (activates conda env "research")
 - `run-load.sh` - Wrapper script for load script
@@ -169,6 +218,10 @@ Wait for: `Application startup complete.`
 - **Image**: `lmsysorg/sglang:v0.5.6.post2-runtime`
 - **Tensor Parallel Size**: 8 (8x H200)
 - **Context Length**: 2,097,152 tokens (2M)
+- **Memory Fraction**: 0.80 (conservative for 2M context)
+- **CUDA Graph**: Disabled (`--disable-cuda-graph`) to save memory
+  - **Why disabled**: CUDA graph requires 4-10GB extra memory per GPU for 2M context
+  - **Trade-off**: ~5-15% performance loss, but avoids OOM and saves ~32-80GB total memory
 
 ## Testing Different Context Lengths
 
@@ -249,17 +302,21 @@ curl http://localhost:8000/v1/models
 ## Key Findings
 
 1. ✅ **vLLM v0.12.0 works** with Llama-4-Scout at 2M context
-2. ✅ **GQA optimization** reduces KV cache by 80%
-3. ✅ **PagedAttention** enables efficient memory management
-4. ✅ **8x H200** provides sufficient memory (133GB used / 143GB total)
-5. ✅ **Test passed**: 1.62M tokens input + 200 tokens output
+2. ✅ **SGLang v0.5.6.post2-runtime works** with Llama-4-Scout at 2M context (slower than vLLM)
+3. ✅ **GQA optimization** reduces KV cache by 80%
+4. ✅ **PagedAttention** enables efficient memory management
+5. ✅ **8x H200** provides sufficient memory (133GB used / 143GB total)
+6. ✅ **Both backends tested**: vLLM (69s) and SGLang (403s) for 2M context
+7. ✅ **Random start position** prevents prefix cache bias in benchmarks
+8. ✅ **CUDA graph disabled** in SGLang for 2M context to avoid OOM
 
 ## Next Steps
 
-1. **Test SGLang** with same configuration
+1. ✅ **Test SGLang** - Completed
 2. **Concurrency testing**: 50 concurrent requests (as per requirements)
 3. **Variable context testing**: 10K to 2M tokens
 4. **Production deployment**: Use Kubernetes configs if needed
+5. **Performance optimization**: Investigate SGLang performance improvements
 
 ## References
 

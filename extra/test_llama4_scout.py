@@ -9,6 +9,7 @@ import requests
 import json
 import time
 import sys
+import random
 from typing import Optional
 
 try:
@@ -19,18 +20,14 @@ except ImportError:
     print("⚠️  Warning: transformers not available, using approximate token counting")
 
 
-def test_vllm(
-    base_url: str,
-    input_length: int,
-    output_length: int,
-    model_path: str = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
-):
-    """Test vLLM with specified context length"""
-    print(f"Testing vLLM with {input_length} input tokens + {output_length} output tokens")
+def generate_prompt_text(input_length: int) -> str:
+    """
+    Generate prompt text with approximately input_length tokens.
+    Uses the same logic for both vLLM and SGLang to ensure fair comparison.
     
-    # Create a prompt with approximately input_length tokens
-    # For large contexts, use large_text_10mb.txt (15.7MB file)
-    # Use conservative estimate (4.5 chars/token) to ensure we reach target
+    For small contexts (<100K): Uses tokenizer with sonnet.txt for accuracy.
+    For large contexts (>=100K): Uses smart sampling from large_text_10mb.txt.
+    """
     large_text_path = "/home/fuhwu/workspace/coderepo/extra/large_text_10mb.txt"
     sonnet_path = "/home/fuhwu/workspace/benchmark/genai-bench/genai_bench/data/sonnet.txt"
     
@@ -53,6 +50,7 @@ def test_vllm(
             
             actual_tokens = len(tokenizer.encode(prompt_text, add_special_tokens=False))
             print(f"  ✅ Generated text with {actual_tokens:,} tokens (target: {input_length:,})")
+            return prompt_text
         except Exception as e:
             print(f"  ⚠️  Tokenizer failed: {e}, using approximation")
             # Fallback to approximation
@@ -62,13 +60,26 @@ def test_vllm(
                 chars_per_token = 4.5  # Conservative estimate (ensures ≥2M, less overhead than 5.5) to ensure we reach target
                 target_chars = int(input_length * chars_per_token)
                 
+                # Start at a random position to avoid prefix caching
                 if len(large_text) >= target_chars:
-                    prompt_text = large_text[:target_chars]
+                    max_start = len(large_text) - target_chars
+                    start_pos = random.randint(0, max_start) if max_start > 0 else 0
+                    prompt_text = large_text[start_pos:start_pos + target_chars]
+                    print(f"  Using approximation from position {start_pos:,}: {len(prompt_text):,} characters ≈ {int(len(prompt_text) / chars_per_token):,} tokens")
                 else:
                     num_repeats = (target_chars // len(large_text)) + 1
-                    prompt_text = (large_text + "\n") * num_repeats
+                    start_pos = random.randint(0, len(large_text) - 1) if len(large_text) > 0 else 0
+                    prompt_text = large_text[start_pos:] + "\n"
+                    remaining_chars = target_chars - len(prompt_text)
+                    full_repeats_needed = remaining_chars // (len(large_text) + 1)
+                    for _ in range(full_repeats_needed):
+                        prompt_text += large_text + "\n"
+                    remaining_chars = target_chars - len(prompt_text)
+                    if remaining_chars > 0:
+                        prompt_text += large_text[:remaining_chars]
                     prompt_text = prompt_text[:target_chars]
-                print(f"  Using approximation: {len(prompt_text):,} characters ≈ {int(len(prompt_text) / chars_per_token):,} tokens")
+                    print(f"  Using approximation (repeated, starting at {start_pos:,}): {len(prompt_text):,} characters ≈ {int(len(prompt_text) / chars_per_token):,} tokens")
+                return prompt_text
             except Exception as e2:
                 print(f"  ⚠️  Fallback failed: {e2}")
                 raise
@@ -104,18 +115,54 @@ def test_vllm(
             
             target_chars = int(input_length * chars_per_token)
             
+            # Start at a random position to avoid prefix caching
+            # This ensures fair performance comparison between different runs
             if len(large_text) >= target_chars:
-                prompt_text = large_text[:target_chars]
-                print(f"  Using large_text_10mb.txt (truncated): {len(prompt_text):,} characters")
+                # Random starting position within the file
+                max_start = len(large_text) - target_chars
+                start_pos = random.randint(0, max_start) if max_start > 0 else 0
+                prompt_text = large_text[start_pos:start_pos + target_chars]
+                print(f"  Using large_text_10mb.txt (truncated from position {start_pos:,}): {len(prompt_text):,} characters")
             else:
+                # Need to repeat the text, but start at random position for first chunk
                 num_repeats = (target_chars // len(large_text)) + 1
-                prompt_text = (large_text + "\n") * num_repeats
+                start_pos = random.randint(0, len(large_text) - 1) if len(large_text) > 0 else 0
+                
+                # Build text starting from random position, wrapping around
+                prompt_text = large_text[start_pos:] + "\n"
+                remaining_chars = target_chars - len(prompt_text)
+                
+                # Add full repeats
+                full_repeats_needed = remaining_chars // (len(large_text) + 1)
+                for _ in range(full_repeats_needed):
+                    prompt_text += large_text + "\n"
+                
+                # Add final partial chunk from beginning
+                remaining_chars = target_chars - len(prompt_text)
+                if remaining_chars > 0:
+                    prompt_text += large_text[:remaining_chars]
+                
+                # Trim to exact target
                 prompt_text = prompt_text[:target_chars]
-                print(f"  Using large_text_10mb.txt (repeated {num_repeats}x): {len(prompt_text):,} characters")
+                print(f"  Using large_text_10mb.txt (repeated {num_repeats}x, starting at position {start_pos:,}): {len(prompt_text):,} characters")
             print(f"  Estimated tokens: {int(len(prompt_text) / chars_per_token):,} (target: {input_length:,})")
+            return prompt_text
         except Exception as e:
             print(f"  ❌ Failed to read large_text_10mb.txt: {e}")
             raise
+
+
+def test_vllm(
+    base_url: str,
+    input_length: int,
+    output_length: int,
+    model_path: str = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+):
+    """Test vLLM with specified context length"""
+    print(f"Testing vLLM with {input_length} input tokens + {output_length} output tokens")
+    
+    # Generate prompt text using shared function (same as SGLang for fair comparison)
+    prompt_text = generate_prompt_text(input_length)
     
     payload = {
         "model": model_path,
@@ -175,68 +222,8 @@ def test_sglang(
     """Test SGLang with specified context length"""
     print(f"Testing SGLang with {input_length} input tokens + {output_length} output tokens")
     
-    # Create a prompt with approximately input_length tokens
-    # Always use tokenizer for accurate token counting
-    large_text_path = "/home/fuhwu/workspace/coderepo/extra/large_text_10mb.txt"
-    sonnet_path = "/home/fuhwu/workspace/benchmark/genai-bench/genai_bench/data/sonnet.txt"
-    
-    if HAS_TOKENIZER:
-        try:
-            tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-4-Scout-17B-16E-Instruct", trust_remote_code=True)
-            with open(sonnet_path, 'r') as f:
-                base_text = f.read()
-            
-            prompt_text = base_text
-            while len(tokenizer.encode(prompt_text, add_special_tokens=False)) < input_length:
-                prompt_text += "\n\n" + base_text
-            
-            tokens = tokenizer.encode(prompt_text, add_special_tokens=False)
-            if len(tokens) > input_length:
-                tokens = tokens[:input_length]
-                prompt_text = tokenizer.decode(tokens)
-            
-            actual_tokens = len(tokenizer.encode(prompt_text, add_special_tokens=False))
-            print(f"  ✅ Generated text with {actual_tokens:,} tokens (target: {input_length:,})")
-        except Exception as e:
-            print(f"  ⚠️  Tokenizer failed: {e}, using approximation")
-            # Fallback with conservative ratio
-            try:
-                with open(large_text_path, 'r') as f:
-                    large_text = f.read()
-                chars_per_token = 4.5  # Conservative estimate (ensures ≥2M, less overhead than 5.5)
-                target_chars = int(input_length * chars_per_token)
-                
-                if len(large_text) >= target_chars:
-                    prompt_text = large_text[:target_chars]
-                else:
-                    num_repeats = (target_chars // len(large_text)) + 1
-                    prompt_text = (large_text + "\n") * num_repeats
-                    prompt_text = prompt_text[:target_chars]
-                print(f"  Using approximation: {len(prompt_text):,} characters ≈ {int(len(prompt_text) / chars_per_token):,} tokens")
-            except Exception as e2:
-                print(f"  ❌ Fallback failed: {e2}")
-                raise
-    else:
-        # For large contexts, use fast approximation with conservative ratio (5.5 chars/token)
-        try:
-            with open(large_text_path, 'r') as f:
-                large_text = f.read()
-            
-            chars_per_token = 4.5  # Conservative estimate (ensures ≥2M, less overhead than 5.5)
-            target_chars = int(input_length * chars_per_token)
-            
-            if len(large_text) >= target_chars:
-                prompt_text = large_text[:target_chars]
-                print(f"  Using large_text_10mb.txt (truncated): {len(prompt_text):,} characters")
-            else:
-                num_repeats = (target_chars // len(large_text)) + 1
-                prompt_text = (large_text + "\n") * num_repeats
-                prompt_text = prompt_text[:target_chars]
-                print(f"  Using large_text_10mb.txt (repeated {num_repeats}x): {len(prompt_text):,} characters")
-            print(f"  Estimated tokens: {int(len(prompt_text) / chars_per_token):,} (using 4.5 ratio ensures ≥ {input_length:,})")
-        except Exception as e:
-            print(f"  ❌ Failed to read large_text_10mb.txt: {e}")
-            raise
+    # Generate prompt text using shared function (same as vLLM for fair comparison)
+    prompt_text = generate_prompt_text(input_length)
     
     payload = {
         "text": prompt_text,
