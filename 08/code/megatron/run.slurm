@@ -241,7 +241,7 @@ MODEL_ARGS=(
 TRAINING_ARGS=(
     --micro-batch-size $MICRO_BATCH_SIZE
     --global-batch-size $GLOBAL_BATCH_SIZE
-    --train-samples 1000000  # Reduced for demonstration
+    --train-samples 1280  # Reduced for demonstration (10 iterations with batch size 128)
     --lr-decay-samples 950000
     --lr-warmup-samples 5000
     --lr $LR
