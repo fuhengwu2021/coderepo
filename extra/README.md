@@ -49,7 +49,17 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 - **GPU KV cache usage**: **31.3%** (during processing)
 - **Status**: **200 OK** ✅
 - **Configuration**: Hybrid KV Cache Manager enabled via `VLLM_ALLOW_CHUNKED_LOCAL_ATTN_WITH_HYBRID_KV_CACHE=1`
-- **Max supported**: **11.6M tokens per request** (with Hybrid Manager enabled)
+- **Max supported**: **11.6M tokens per request** (with Hybrid Manager enabled, 5M config, 2.96x concurrency)
+
+**8M Context Length Configuration (Current):**
+- **Max model len**: **8,388,608 tokens** (8M)
+- **GPU memory utilization**: **90%**
+- **GPU KV cache size**: **3,919,664 tokens** (per GPU)
+- **Available KV cache memory**: **89.71 GiB**
+- **Max concurrency**: **1.86x** (for 8M tokens per request)
+- **Configuration**: Hybrid KV Cache Manager enabled, `--shm-size 128g`, `OMP_NUM_THREADS=8`
+- **Note**: Concurrency decreased from 2.96x (5M config) to 1.86x (8M config) because larger `max_model_len` requires more KV cache reservation per request
+- **6.5M tokens test**: Running...
 
 **Performance Analysis:**
 - Processing 2M+ tokens in ~70 seconds demonstrates vLLM can handle large contexts efficiently

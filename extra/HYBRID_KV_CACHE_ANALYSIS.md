@@ -317,11 +317,21 @@ VLLM_ALLOW_CHUNKED_LOCAL_ATTN_WITH_HYBRID_KV_CACHE=1
 
 ### 理论极限值总结（Hybrid Manager 启用后）
 
-**当前配置（已验证）：**
+**5M 配置（已验证）：**
+- **Max model len**: 5,242,880 tokens (5M)
 - **Max tokens per request**: **11.60M tokens**
   - 基于 KV cache size: 3,919,664 tokens
   - Max concurrency: 2.96x
   - 计算公式: `11,602,205 = 3,919,664 × 2.96`
+
+**8M 配置（当前运行）：**
+- **Max model len**: 8,388,608 tokens (8M)
+- **Max concurrency**: **1.86x** (for 8M tokens per request)
+- **GPU KV cache size**: 3,919,664 tokens (保持不变)
+- **Available KV cache memory**: 89.71 GiB
+- **说明**: 随着 `max_model_len` 增加，每个请求需要预留更多 KV cache，因此并发能力下降（从 2.96x 降到 1.86x）
+- **单个请求最大长度**: 8,388,608 tokens（受 `max_model_len` 限制）
+- **总并发能力**: 可以同时处理约 1.86 个 8M tokens 的请求，或更多较小请求
 
 **如果优化配置：**
 - **如果增加 GPU 内存利用率**（从 90% 到 95%）：
@@ -334,10 +344,12 @@ VLLM_ALLOW_CHUNKED_LOCAL_ATTN_WITH_HYBRID_KV_CACHE=1
   - **注意**：这是不现实的（需要保留其他内存用于模型权重、激活值等）
 
 **实际建议：**
-- **保守使用**: 5-8M tokens per request
-- **当前配置最大**: **11.6M tokens per request**（已验证配置支持）
-- **已验证成功**: 4.91M tokens ✅
-- **理论极限**: 10.84M - 12.29M tokens（取决于配置优化）
+- **5M 配置**: 保守使用 5-6M tokens per request，最大支持 11.6M tokens per request
+- **8M 配置**: 单个请求最大 8M tokens，并发能力 1.86x
+- **已验证成功**: 
+  - 5M 配置: 4.91M tokens ✅
+  - 8M 配置: 6.5M tokens 测试中...
+- **理论极限**: 10.84M - 12.29M tokens（取决于配置优化，但受 `max_model_len` 限制）
 
 **关键发现：**
 - Hybrid Manager 启用后，理论极限从 **2.94M** 提升到 **11.6M tokens**（**+294.7%**）
