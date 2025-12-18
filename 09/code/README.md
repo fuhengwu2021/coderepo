@@ -294,7 +294,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
-    "messages": [{"role": "user", "content": "Which is more beautiful: Gaussian Integral and Euler Formula, and why in one sentence?"}]
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
   }'
 ```
 
@@ -318,8 +318,9 @@ curl http://localhost:9876/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "/models/Phi-tiny-MoE-instruct",
-    "messages": [{"role": "user", "content": "Which is more beautiful: Gaussian Integral and Euler Formula, and why in one sentence?"}],
-    "max_tokens": 100
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}],
+    "max_tokens": 100,
+    "owned_by": "vllm"
   }'
 ```
 
@@ -338,7 +339,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
-    "messages": [{"role": "user", "content": "Which is more beautiful: Gaussian Integral and Euler Formula, and why in one sentence?"}]
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
   }'
 
 # Test phi-tiny-moe (automatically routed)
@@ -346,7 +347,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "/models/Phi-tiny-MoE-instruct",
-    "messages": [{"role": "user", "content": "Which is more beautiful: Gaussian Integral and Euler Formula, and why in one sentence?"}]
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
   }'
 ```
 
@@ -354,14 +355,17 @@ The Gateway automatically routes requests to the correct service based on the `m
 
 ### 9. Deploy API Gateway (Optional but Recommended)
 
-The API Gateway provides a unified entry point that automatically routes requests to the correct vLLM service based on the `model` field in the request body. This eliminates the need to know which service to call for each model.
+The API Gateway provides a unified entry point that automatically routes requests to the correct inference service (vLLM, SGLang, etc.) based on the `model` and `owned_by` fields in the request body. This eliminates the need to know which service to call for each model and inference engine.
+
+**Note:** The `owned_by` field is the preferred method for routing. For backward compatibility, `engine` and `inference_server` fields are also supported.
 
 #### Why Use API Gateway?
 
-- **Unified Entry Point**: Single endpoint for all models
-- **Automatic Routing**: Routes requests based on `model` field in request body
+- **Unified Entry Point**: Single endpoint for all models and inference servers
+- **Automatic Routing**: Routes requests based on `model` and `owned_by` fields in request body (also supports `engine`/`inference_server` for backward compatibility)
+- **Multi-Engine Support**: Supports multiple inference engines (vLLM, SGLang) for the same model
 - **No GPU Required**: Gateway is lightweight and can run on any agent node
-- **Easy to Scale**: Add new models by updating the routing configuration
+- **Easy to Scale**: Add new models or inference servers by updating the routing configuration
 
 #### Deployment Steps
 
@@ -383,17 +387,27 @@ kubectl get pod,svc -l app=vllm-gateway
 
 #### Gateway Configuration
 
-The Gateway automatically routes requests based on the `model` field. Current model mappings are defined in `api-gateway.py`:
+The Gateway automatically routes requests based on both the `model` field and the `owned_by` field (or `engine`/`inference_server` for backward compatibility). Current routing configuration is defined in `api-gateway.py`:
 
 ```python
-MODEL_TO_SERVICE = {
-    "meta-llama/Llama-3.2-1B-Instruct": "vllm-llama-32-1b",
-    "/models/Phi-tiny-MoE-instruct": "vllm-phi-tiny-moe-service",
-    "Phi-tiny-MoE-instruct": "vllm-phi-tiny-moe-service",
+ROUTING_CONFIG = {
+    # vLLM services
+    ("meta-llama/Llama-3.2-1B-Instruct", "vllm"): "vllm-llama-32-1b",
+    ("meta-llama/Llama-3.2-1B-Instruct", None): "vllm-llama-32-1b",  # Default to vLLM
+    ("/models/Phi-tiny-MoE-instruct", "vllm"): "vllm-phi-tiny-moe-service",
+    ("/models/Phi-tiny-MoE-instruct", None): "vllm-phi-tiny-moe-service",
+    
+    # SGLang services
+    ("meta-llama/Llama-3.2-1B-Instruct", "sglang"): "sglang-llama-32-1b",
 }
 ```
 
-To add a new model, simply update this mapping in `api-gateway.py` and redeploy.
+**Routing Logic:**
+- If `owned_by` is specified, routes to the corresponding service (e.g., `"owned_by": "sglang"` or `"owned_by": "vllm"`)
+- If not specified, defaults to vLLM (when `None` is in the routing config)
+- For backward compatibility, `engine` and `inference_server` fields are also supported
+
+To add a new model or inference server, simply update the `ROUTING_CONFIG` in `api-gateway.py` and redeploy the gateway pod.
 
 #### Production Deployment: Exposing Gateway to External Access
 
@@ -426,11 +440,31 @@ kubectl apply -f vllm/ingress-tls-traefik.yaml
 # Test access via HTTPS
 curl -k https://localhost/health
 curl -k https://localhost/v1/models
+
+# Test with SGLang (specify owned_by: "sglang")
 curl -k https://localhost/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "owned_by": "sglang",
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
+  }'
+
+# Test with vLLM (specify owned_by: "vllm" or omit for default)
+curl -k https://localhost/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "owned_by": "vllm",
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
+  }'
+
+# Default routing (no owned_by specified - routes to vLLM)
+curl -k https://localhost/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
   }'
 ```
 
@@ -448,8 +482,26 @@ For quick testing without Ingress:
 # Port-forward Gateway directly
 kubectl port-forward svc/vllm-api-gateway 8000:8000
 
-# Test
+# Test health endpoint
 curl http://localhost:8000/health
+
+# Test with SGLang
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "owned_by": "sglang",
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
+  }'
+
+# Test with vLLM
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "owned_by": "vllm",
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
+  }'
 ```
 
 **Note:** For production with a real domain, replace `localhost` in the Ingress configuration with your domain (e.g., `api.example.com`) and configure DNS accordingly.
@@ -464,20 +516,30 @@ kubectl port-forward svc/vllm-api-gateway 8000:8000
 # Test health endpoint
 curl http://localhost:8000/health
 
-# Test with automatic routing (Gateway will route to llama service)
+# Test with SGLang (specify owned_by: "sglang")
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "owned_by": "sglang",
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
   }'
 
-# Test with different model (Gateway will route to phi-tiny-moe service)
+# Test with vLLM (specify owned_by: "vllm" or omit for default)
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "/models/Phi-tiny-MoE-instruct",
-    "messages": [{"role": "user", "content": "What is a mixture of experts?"}]
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "owned_by": "vllm",
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
+  }'
+
+# Default routing (no owned_by specified - routes to vLLM)
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
   }'
 
 # Or use the test script
@@ -491,15 +553,17 @@ Client Request
     ↓
 API Gateway (Unified Entry Point)
     ↓
-Parse 'model' field from request body
+Parse 'model' and 'owned_by' fields from request body (also supports 'engine'/'inference_server' for backward compatibility)
     ↓
-Route to corresponding Service
-    - "meta-llama/Llama-3.2-1B-Instruct" → vllm-llama-32-1b:8000
-    - "/models/Phi-tiny-MoE-instruct" → vllm-phi-tiny-moe-service:8000
+Route to corresponding Service based on (model, engine) tuple
+    - ("meta-llama/Llama-3.2-1B-Instruct", "sglang") → sglang-llama-32-1b:8000
+    - ("meta-llama/Llama-3.2-1B-Instruct", "vllm") → vllm-llama-32-1b:8000
+    - ("meta-llama/Llama-3.2-1B-Instruct", None) → vllm-llama-32-1b:8000 (default)
+    - ("/models/Phi-tiny-MoE-instruct", "vllm") → vllm-phi-tiny-moe-service:8000
     ↓
-转发请求到对应的 vLLM Pod
+Forward request to corresponding inference service Pod
     ↓
-返回响应
+Return response
 ```
 
 #### Node Placement

@@ -84,7 +84,7 @@ curl http://localhost:9876/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "/models/Phi-tiny-MoE-instruct",
-    "messages": [{"role": "user", "content": "What is a mixture of experts?"}],
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}],
     "max_tokens": 100
   }'
 ```
@@ -102,7 +102,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "/models/Phi-tiny-MoE-instruct",
-    "messages": [{"role": "user", "content": "What is a mixture of experts?"}]
+    "messages": [{"role": "user", "content": "Which is more beautiful—the Gaussian integral or Euler formula, and why, in one sentence?"}]
   }'
 ```
 
