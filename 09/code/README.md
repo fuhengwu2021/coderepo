@@ -294,7 +294,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "messages": [{"role": "user", "content": "Which is more beautiful: Gaussian Integral and Euler Formula, and why in one sentence?"}]
   }'
 ```
 
@@ -318,7 +318,7 @@ curl http://localhost:9876/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "/models/Phi-tiny-MoE-instruct",
-    "messages": [{"role": "user", "content": "What is a mixture of experts?"}],
+    "messages": [{"role": "user", "content": "Which is more beautiful: Gaussian Integral and Euler Formula, and why in one sentence?"}],
     "max_tokens": 100
   }'
 ```
@@ -338,7 +338,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
-    "messages": [{"role": "user", "content": "Explain mixture of experts in one sentence!"}]
+    "messages": [{"role": "user", "content": "Which is more beautiful: Gaussian Integral and Euler Formula, and why in one sentence?"}]
   }'
 
 # Test phi-tiny-moe (automatically routed)
@@ -346,7 +346,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "/models/Phi-tiny-MoE-instruct",
-    "messages": [{"role": "user", "content": "Explain mixture of experts in one sentence!"}]
+    "messages": [{"role": "user", "content": "Which is more beautiful: Gaussian Integral and Euler Formula, and why in one sentence?"}]
   }'
 ```
 
