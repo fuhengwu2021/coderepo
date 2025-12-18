@@ -162,14 +162,19 @@ def test_vllm(
     print(f"Testing vLLM with {input_length} input tokens + {output_length} output tokens")
     
     # Generate prompt text using shared function (same as SGLang for fair comparison)
+    # Reserve ~50 tokens for the summarization instruction
+    instruction = "Please summarize the following text in detail. "
     prompt_text = generate_prompt_text(input_length)
+    
+    # Prepend instruction to the prompt
+    full_prompt = instruction + prompt_text
     
     payload = {
         "model": model_path,
         "messages": [
             {
                 "role": "user",
-                "content": prompt_text
+                "content": full_prompt
             }
         ],
         "max_tokens": output_length,
@@ -177,8 +182,8 @@ def test_vllm(
     }
     
     print(f"Sending request to {base_url}/v1/chat/completions")
-    print(f"Input length (approx): {len(prompt_text)} characters")
-    print(f"Expected output tokens: {output_length}")
+    print(f"Input length (approx): {len(full_prompt)} characters (including summarization instruction)")
+    print(f"Expected output tokens: {output_length} (summary)")
     print()
     
     start_time = time.time()
@@ -223,10 +228,15 @@ def test_sglang(
     print(f"Testing SGLang with {input_length} input tokens + {output_length} output tokens")
     
     # Generate prompt text using shared function (same as vLLM for fair comparison)
+    # Add summarization instruction
+    instruction = "Please summarize the following text in detail. "
     prompt_text = generate_prompt_text(input_length)
     
+    # Prepend instruction to the prompt
+    full_prompt = instruction + prompt_text
+    
     payload = {
-        "text": prompt_text,
+        "text": full_prompt,
         "sampling_params": {
             "max_new_tokens": output_length,
             "temperature": 0.7,
@@ -234,8 +244,8 @@ def test_sglang(
     }
     
     print(f"Sending request to {base_url}/generate")
-    print(f"Input length (approx): {len(prompt_text)} characters")
-    print(f"Expected output tokens: {output_length}")
+    print(f"Input length (approx): {len(full_prompt)} characters (including summarization instruction)")
+    print(f"Expected output tokens: {output_length} (summary)")
     print()
     
     start_time = time.time()

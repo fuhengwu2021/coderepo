@@ -71,12 +71,13 @@ echo ""
 docker run -d \
   --name ${CONTAINER_NAME} \
   --gpus all \
-  --shm-size 10g \
+  --shm-size 128g \
   -p ${PORT}:8000 \
   -v /mnt/co-research/shared-models:/mnt/co-research/shared-models \
   -e HF_HOME=/mnt/co-research/shared-models/hub \
-  -e TRANSFORMERS_CACHE=/mnt/co-research/shared-models/hub \
   -e HF_HUB_CACHE=/mnt/co-research/shared-models/hub \
+  -e VLLM_ALLOW_CHUNKED_LOCAL_ATTN_WITH_HYBRID_KV_CACHE=1 \
+  -e OMP_NUM_THREADS=8 \
   ${HF_TOKEN:+-e HF_TOKEN="$HF_TOKEN"} \
   --ulimit nofile=65535:65535 \
   --entrypoint python3 \
@@ -86,8 +87,8 @@ docker run -d \
     --host 0.0.0.0 \
     --port 8000 \
     --tensor-parallel-size 8 \
-    --max-model-len 2097152 \
-    --gpu-memory-utilization 0.9 \
+    --max-model-len 8388608 \
+    --gpu-memory-utilization 0.90 \
     --trust-remote-code
 
 if [ $? -eq 0 ]; then
