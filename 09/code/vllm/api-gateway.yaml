@@ -5,7 +5,7 @@ metadata:
 data:
   api-gateway.py: |
     """
-    vLLM API Gateway - 根据请求体中的 model 字段自动路由到对应的 vLLM Service
+    vLLM API Gateway - Automatically routes requests to corresponding vLLM Service based on 'model' field in request body
     """
     from fastapi import FastAPI, Request, HTTPException
     from fastapi.responses import StreamingResponse, JSONResponse
@@ -30,31 +30,31 @@ data:
         allow_headers=["*"],
     )
 
-    # Model 到 Service 的映射
-    # 格式: {model_name_in_request: service_name}
+    # Model to Service mapping
+    # Format: {model_name_in_request: service_name}
     MODEL_TO_SERVICE = {
         "meta-llama/Llama-3.2-1B-Instruct": "vllm-llama-32-1b",
         "/models/Phi-tiny-MoE-instruct": "vllm-phi-tiny-moe-service",
-        "Phi-tiny-MoE-instruct": "vllm-phi-tiny-moe-service",  # 兼容不同的格式
+        "Phi-tiny-MoE-instruct": "vllm-phi-tiny-moe-service",  # Support different formats
     }
 
-    # Service 端口（所有 Service 都使用 8000）
+    # Service port (all Services use 8000)
     SERVICE_PORT = 8000
 
 
     def get_service_for_model(model: str) -> str:
-        """根据 model 名称获取对应的 Service 名称"""
-        # 精确匹配
+        """Get corresponding Service name based on model name"""
+        # Exact match
         if model in MODEL_TO_SERVICE:
             return MODEL_TO_SERVICE[model]
         
-        # 模糊匹配（支持部分匹配）
+        # Fuzzy match (supports partial matching)
         for key, service in MODEL_TO_SERVICE.items():
             if key.lower() in model.lower() or model.lower() in key.lower():
                 logger.info(f"Matched model '{model}' to service '{service}' via fuzzy match with '{key}'")
                 return service
         
-        # 如果找不到，返回 None
+        # Return None if not found
         return None
 
 
@@ -66,11 +66,11 @@ data:
         body: bytes = None,
         params: Dict[str, Any] = None
     ) -> httpx.Response:
-        """转发请求到对应的 Service"""
-        # 构建目标 URL
+        """Forward request to corresponding Service"""
+        # Build target URL
         target_url = f"http://{service_name}:{SERVICE_PORT}{path}"
         
-        # 移除一些不应该转发的 headers
+        # Remove headers that shouldn't be forwarded
         forward_headers = {k: v for k, v in headers.items() 
                           if k.lower() not in ['host', 'content-length']}
         
@@ -96,26 +96,52 @@ data:
 
     @app.get("/health")
     async def health():
-        """健康检查"""
+        """Health check"""
         return {"status": "healthy", "service": "vllm-api-gateway"}
 
 
+    def normalize_model_id(model_id: str) -> str:
+        """Normalize model ID (for deduplication)"""
+        # Remove /models/ prefix if exists
+        if model_id.startswith("/models/"):
+            return model_id[8:]  # Remove "/models/" (8 characters)
+        return model_id
+
     @app.get("/v1/models")
     async def list_models():
-        """列出所有可用的模型"""
+        """List all available models"""
         models = []
-        for model_name, service_name in MODEL_TO_SERVICE.items():
+        seen_model_ids = set()  # For deduplication (store original IDs)
+        seen_normalized_ids = set()  # For deduplication (store normalized IDs)
+        
+        # Collect all unique services (avoid calling same service multiple times)
+        unique_services = set(MODEL_TO_SERVICE.values())
+        
+        for service_name in unique_services:
             try:
-                # 尝试从对应的 Service 获取模型信息
+                # Try to get model information from corresponding Service
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     response = await client.get(f"http://{service_name}:{SERVICE_PORT}/v1/models")
                     if response.status_code == 200:
                         data = response.json()
                         if "data" in data:
-                            models.extend(data["data"])
+                            # Only add unseen models (deduplicate based on normalized model id)
+                            for model in data["data"]:
+                                model_id = model.get("id", "")
+                                if model_id:
+                                    normalized_id = normalize_model_id(model_id)
+                                    if normalized_id not in seen_normalized_ids:
+                                        seen_model_ids.add(model_id)
+                                        seen_normalized_ids.add(normalized_id)
+                                        models.append(model)
             except Exception as e:
                 logger.warning(f"Failed to get models from {service_name}: {e}")
-                # 如果无法连接，至少返回模型名称
+        
+        # If some services are unreachable, at least return model names from mapping (but deduplicate)
+        for model_name in MODEL_TO_SERVICE.keys():
+            normalized_name = normalize_model_id(model_name)
+            if normalized_name not in seen_normalized_ids:
+                seen_normalized_ids.add(normalized_name)
                 models.append({
                     "id": model_name,
                     "object": "model",
@@ -128,11 +154,11 @@ data:
 
     @app.api_route("/v1/{path:path}", methods=["GET", "POST", "DELETE"])
     async def proxy_v1(request: Request, path: str):
-        """代理所有 /v1/* 请求"""
-        # 读取请求体
+        """Proxy all /v1/* requests"""
+        # Read request body
         body = await request.body()
         
-        # 解析请求体以获取 model 字段
+        # Parse request body to get model field
         model = None
         if body:
             try:
@@ -141,18 +167,18 @@ data:
             except json.JSONDecodeError:
                 pass
         
-        # 如果没有 model 字段，尝试从查询参数获取
+        # If no model field, try to get from query parameters
         if not model:
             model = request.query_params.get("model")
         
-        # 如果还是没有 model，返回错误
+        # If still no model, return error
         if not model:
             raise HTTPException(
                 status_code=400,
                 detail="Missing 'model' field in request body or query parameters"
             )
         
-        # 获取对应的 Service
+        # Get corresponding Service
         service_name = get_service_for_model(model)
         if not service_name:
             raise HTTPException(
@@ -162,7 +188,7 @@ data:
         
         logger.info(f"Routing request for model '{model}' to service '{service_name}'")
         
-        # 转发请求
+        # Forward request
         try:
             response = await forward_request(
                 service_name=service_name,
@@ -173,14 +199,14 @@ data:
                 params=dict(request.query_params)
             )
             
-            # 处理流式响应
+            # Handle streaming response
             if "text/event-stream" in response.headers.get("content-type", ""):
                 async def generate():
                     async for chunk in response.aiter_bytes():
                         yield chunk
                 return StreamingResponse(generate(), media_type="text/event-stream")
             
-            # 返回 JSON 响应
+            # Return JSON response
             return JSONResponse(
                 content=response.json() if response.content else {},
                 status_code=response.status_code,
@@ -200,11 +226,11 @@ data:
 
     @app.api_route("/{path:path}", methods=["GET", "POST", "DELETE"])
     async def proxy_other(request: Request, path: str):
-        """代理其他路径的请求（如 /health, /metrics 等）"""
-        # 对于非 /v1/* 路径，尝试所有 Service（用于健康检查等）
-        # 或者返回 404
+        """Proxy requests for other paths (e.g., /health, /metrics, etc.)"""
+        # For non-/v1/* paths, try all Services (for health checks, etc.)
+        # Or return 404
         if path in ["health", "metrics"]:
-            # 尝试第一个可用的 Service
+            # Try first available Service
             first_service = list(MODEL_TO_SERVICE.values())[0] if MODEL_TO_SERVICE else None
             if first_service:
                 try:
@@ -237,8 +263,8 @@ metadata:
   labels:
     app: vllm-gateway
 spec:
-  # 部署到 Agent 节点（工作节点），避免占用 Server 节点资源
-  # 使用 nodeAffinity 排除 control-plane 节点
+  # Deploy to Agent nodes (worker nodes), avoid consuming Server node resources
+  # Use nodeAffinity to exclude control-plane nodes
   affinity:
     nodeAffinity:
       requiredDuringSchedulingIgnoredDuringExecution:
@@ -247,7 +273,7 @@ spec:
           - key: node-role.kubernetes.io/control-plane
             operator: DoesNotExist
   tolerations:
-    # 允许调度到有 taints 的节点（如果有的话）
+    # Allow scheduling to nodes with taints (if any)
     - operator: "Exists"
   containers:
   - name: gateway

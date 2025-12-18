@@ -6,15 +6,15 @@ This directory contains code examples for building a complete production LLM ser
 
 ```
 09/code/
-├── vllm/                    # vLLM 服务器部署配置
-│   ├── llama-3.2-1b.yaml    # Llama-3.2-1B-Instruct 模型部署（已部署）
-│   ├── phi-tiny-moe.yaml    # Phi-tiny-MoE-instruct 模型部署
-│   ├── api-gateway.yaml     # API Gateway 部署（自动路由）
-│   ├── api-gateway.py       # Gateway Python 代码（存储在 ConfigMap）
+├── vllm/                    # vLLM server deployment configurations
+│   ├── llama-3.2-1b.yaml    # Llama-3.2-1B-Instruct model deployment (deployed)
+│   ├── phi-tiny-moe.yaml    # Phi-tiny-MoE-instruct model deployment
+│   ├── api-gateway.yaml     # API Gateway deployment (auto-routing)
+│   ├── api-gateway.py       # Gateway Python code (stored in ConfigMap)
 │   ├── deploy-llama-3.2-1b.sh
-│   ├── deploy-gateway.sh    # Gateway 部署脚本
-│   ├── test-api.sh          # API 测试脚本
-│   └── README.md            # vLLM 部署文档
+│   ├── deploy-gateway.sh    # Gateway deployment script
+│   ├── test-api.sh          # API testing script
+│   └── README.md            # vLLM deployment documentation
 └── *.py                     # Python 代码示例
 ```
 
@@ -397,98 +397,63 @@ To add a new model, simply update this mapping in `api-gateway.py` and redeploy.
 
 #### Production Deployment: Exposing Gateway to External Access
 
-For production environments, expose the Gateway service using Ingress for production-grade access with TLS and domain names.
+Expose the Gateway service using Ingress with TLS for production-grade access.
 
-**Prerequisites:**
+**Step 1: Create TLS Certificate**
+
+Create a self-signed certificate for `localhost` (or your domain):
+
 ```bash
-# Install Nginx Ingress Controller (if not already installed)
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /tmp/tls.key \
+  -out /tmp/tls.crt \
+  -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,DNS:*.localhost,IP:127.0.0.1,IP:::1"
 
-# For k3d, use the k3d-specific ingress
-kubectl apply -f https://raw.githubusercontent.com/k3d-io/k3d/main/docs/usage/examples/ingress/ingress.yaml
+kubectl create secret tls vllm-api-tls \
+  --cert=/tmp/tls.crt \
+  --key=/tmp/tls.key
 ```
 
-**Create Ingress Resource:**
+**Step 2: Deploy Ingress with Traefik (Recommended)**
 
-Create `vllm/ingress.yaml`:
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: vllm-api-gateway-ingress
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
-    nginx.ingress.kubernetes.io/ssl-redirect: "false"  # Set to true with TLS
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-spec:
-  ingressClassName: nginx
-  rules:
-  - host: localhost
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: vllm-api-gateway
-            port:
-              number: 8000
-```
+k3d comes with Traefik by default, and the loadbalancer forwards to Traefik on ports 80/443. Use Traefik for the simplest setup:
 
-**Deploy:**
 ```bash
-kubectl apply -f vllm/ingress.yaml
+# Apply Traefik Ingress configuration
+kubectl apply -f vllm/ingress-tls-traefik.yaml
 
-# Access via localhost (HTTP)
-curl http://localhost/v1/models
+# Test access via HTTPS
+curl -k https://localhost/health
+curl -k https://localhost/v1/models
+curl -k https://localhost/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
 ```
 
-**With TLS (Production):**
+**Why Traefik:**
+- ✅ No cluster recreation needed
+- ✅ k3d loadbalancer already configured
+- ✅ Works on standard HTTPS port 443
+- ✅ Default k3d installation
 
-For production environments with TLS enabled, use HTTPS:
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: vllm-api-gateway-ingress
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"  # If using cert-manager
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-spec:
-  ingressClassName: nginx
-  tls:
-  - hosts:
-    - localhost
-    secretName: vllm-api-tls
-  rules:
-  - host: localhost
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: vllm-api-gateway
-            port:
-              number: 8000
-```
+**Alternative: Port-Forward for Testing**
 
-**Deploy with TLS:**
+For quick testing without Ingress:
+
 ```bash
-kubectl apply -f vllm/ingress.yaml
+# Port-forward Gateway directly
+kubectl port-forward svc/vllm-api-gateway 8000:8000
 
-# Access via HTTPS (if TLS is configured)
-curl https://localhost/v1/models --insecure  # Use --insecure for self-signed certs
-# Or with proper certificate validation:
-curl https://localhost/v1/models --cacert /path/to/ca.crt
+# Test
+curl http://localhost:8000/health
 ```
 
-**Note:** For localhost, TLS is typically not necessary. Use HTTP for local development. TLS is recommended for production environments with real domains.
+**Note:** For production with a real domain, replace `localhost` in the Ingress configuration with your domain (e.g., `api.example.com`) and configure DNS accordingly.
+
 
 #### Testing Gateway
 
@@ -524,11 +489,11 @@ curl http://localhost:8000/v1/chat/completions \
 ```
 Client Request
     ↓
-API Gateway (统一入口)
+API Gateway (Unified Entry Point)
     ↓
-解析请求体中的 'model' 字段
+Parse 'model' field from request body
     ↓
-路由到对应的 Service
+Route to corresponding Service
     - "meta-llama/Llama-3.2-1B-Instruct" → vllm-llama-32-1b:8000
     - "/models/Phi-tiny-MoE-instruct" → vllm-phi-tiny-moe-service:8000
     ↓
@@ -566,11 +531,11 @@ kubectl top pod vllm-llama-32-1b
 kubectl get svc vllm-llama-32-1b
 ```
 
-## 踩过的坑和解决方案 (Common Issues and Solutions)
+## Common Issues and Solutions
 
-### 坑 1: Disk Pressure 导致 Pod 无法调度
+### Issue 1: Disk Pressure Preventing Pod Scheduling
 
-**问题现象：**
+**Symptoms:**
 ```bash
 kubectl get nodes
 # 节点显示 DiskPressure=True
@@ -578,37 +543,37 @@ kubectl describe pod <pod-name>
 # 显示: 0/1 nodes are available: 1 node(s) had disk-pressure
 ```
 
-**原因：**
-- `/dev/sda1` 磁盘使用率超过 85%（kubelet 默认阈值）
-- Docker 镜像和容器占用大量空间
-- k3d 的 overlay 文件系统也在 `/dev/sda1` 上
+**Cause:**
+- `/dev/sda1` disk usage exceeds 85% (kubelet default threshold)
+- Docker images and containers consume significant space
+- k3d's overlay filesystem is also on `/dev/sda1`
 
-**解决方案：**
+**Solutions:**
 
-1. **清理 Docker 资源（推荐，快速有效）**
+1. **Clean Docker resources (Recommended, quick and effective)**
 ```bash
-# 查看磁盘使用
+# Check disk usage
 df -h /dev/sda1
 
-# 查看 Docker 占用
+# Check Docker usage
 docker system df
 
-# 清理未使用的资源（可释放约 200-300GB）
-docker image prune -a -f      # 清理未使用的镜像
-docker container prune -f      # 清理已停止的容器
-docker volume prune -f        # 清理未使用的卷
+# Clean unused resources (can free ~200-300GB)
+docker image prune -a -f      # Clean unused images
+docker container prune -f      # Clean stopped containers
+docker volume prune -f        # Clean unused volumes
 
-# 或使用脚本
+# Or use script
 ./cleanup-docker.sh
 ```
 
-2. **配置 local-path-provisioner 使用 /raid**
+2. **Configure local-path-provisioner to use /raid**
 ```bash
-# 将存储路径改为 /raid/tmpdata（见步骤 4）
-# 这样 PVC 数据会存储在 /raid 而不是 /dev/sda1
+# Change storage path to /raid/tmpdata (see step 4)
+# This stores PVC data in /raid instead of /dev/sda1
 ```
 
-3. **添加 toleration（临时方案，不推荐生产环境）**
+3. **Add toleration (Temporary solution, not recommended for production)**
 ```yaml
 spec:
   tolerations:
@@ -617,19 +582,19 @@ spec:
     effect: NoSchedule
 ```
 
-### 坑 2: vLLM Pod 报错 `libcuda.so.1: cannot open shared object file`
+### Issue 2: vLLM Pod Error `libcuda.so.1: cannot open shared object file`
 
-**问题现象：**
+**Symptoms:**
 ```bash
 kubectl logs vllm-pod
 # ImportError: libcuda.so.1: cannot open shared object file: No such file or directory
 ```
 
-**原因：**
-- Pod 缺少 GPU runtime 配置
-- 没有指定 `runtimeClassName: nvidia`
+**Cause:**
+- Pod missing GPU runtime configuration
+- `runtimeClassName: nvidia` not specified
 
-**解决方案：**
+**Solution:**
 ```yaml
 spec:
   runtimeClassName: nvidia  # 必须添加
@@ -642,22 +607,22 @@ spec:
         nvidia.com/gpu: 1   # 必须添加
 ```
 
-### 坑 3: Gated Model 访问被拒绝
+### Issue 3: Gated Model Access Denied
 
-**问题现象：**
+**Symptoms:**
 ```bash
 kubectl logs vllm-pod
 # OSError: You are trying to access a gated repo. 
 # Access to model ... is restricted. You must have access to it and be authenticated.
 ```
 
-**原因：**
-- 模型是 gated repo（如 meta-llama/Llama-3.2-1B-Instruct）
-- 需要 HuggingFace token 但未配置
+**Cause:**
+- Model is a gated repo (e.g., meta-llama/Llama-3.2-1B-Instruct)
+- HuggingFace token required but not configured
 
-**解决方案：**
+**Solutions:**
 
-1. **创建 Secret（不要硬编码 token）**
+1. **Create Secret (Do not hardcode token)**
 ```bash
 # 从环境变量创建
 kubectl create secret generic hf-token-secret \
@@ -674,68 +639,68 @@ env:
       key: token
 ```
 
-3. **使用部署脚本（自动处理）**
+3. **Use deployment script (handles automatically)**
 ```bash
-./vllm/deploy-llama-3.2-1b.sh  # 脚本会自动创建 Secret
+./vllm/deploy-llama-3.2-1b.sh  # Script automatically creates Secret
 ```
 
-### 坑 4: Service 名称包含点号导致创建失败
+### Issue 4: Service Name Contains Dot Causing Creation Failure
 
-**问题现象：**
+**Symptoms:**
 ```bash
 kubectl apply -f vllm-llama-3.2-1b.yaml
 # Error: metadata.name: Invalid value: "vllm-llama-3.2-1b": 
 # a DNS-1035 label must consist of lower case alphanumeric characters or '-'
 ```
 
-**原因：**
-- Kubernetes Service 名称必须符合 DNS-1035 规范
-- 不能包含点号（`.`），只能使用小写字母、数字和连字符
+**Cause:**
+- Kubernetes Service names must comply with DNS-1035 specification
+- Cannot contain dots (`.`), only lowercase letters, numbers, and hyphens allowed
 
-**解决方案：**
+**Solution:**
 ```yaml
-# ❌ 错误
+# ❌ Wrong
 metadata:
   name: vllm-llama-3.2-1b
 
-# ✅ 正确
+# ✅ Correct
 metadata:
-  name: vllm-llama-32-1b  # 用连字符替代点号
+  name: vllm-llama-32-1b  # Replace dot with hyphen
 ```
 
-### 坑 5: Pod 被 Evicted 即使添加了 Toleration
+### Issue 5: Pod Evicted Even After Adding Toleration
 
-**问题现象：**
+**Symptoms:**
 ```bash
 kubectl get pod
 # NAME               STATUS    RESTARTS   AGE
 # test-pod           Evicted   0          5m
 ```
 
-**原因：**
-- `toleration` 只影响**调度**（scheduling），不影响**驱逐**（eviction）
-- kubelet 会主动驱逐 Pod 当磁盘压力持续存在
-- 即使 Pod 已经运行，kubelet 也会驱逐它
+**Cause:**
+- `toleration` only affects **scheduling**, not **eviction**
+- kubelet actively evicts Pods when disk pressure persists
+- kubelet will evict Pods even if they're already running
 
-**解决方案：**
-1. **解决根本问题：释放磁盘空间**（见坑 1）
-2. **等待 kubelet 更新状态**（清理后需要 1-2 分钟）
+**Solutions:**
+1. **Fix root cause: Free disk space** (see Issue 1)
+2. **Wait for kubelet to update status** (1-2 minutes after cleanup)
 ```bash
-# 清理后等待
+# Wait after cleanup
 sleep 120
 
-# 检查节点状态
+# Check node status
 kubectl describe node | grep -A 2 DiskPressure
-# 应该显示: DiskPressure=False
+# Should show: DiskPressure=False
 ```
 
-### 坑 6: 模型缓存路径导致磁盘压力
+### Issue 6: Model Cache Path Causing Disk Pressure
 
-**问题现象：**
-- 模型下载到 `/root/.cache/huggingface`（默认路径）
-- 这个路径在容器 overlay 文件系统中，占用 `/dev/sda1`
+**Symptoms:**
+- Models downloaded to `/root/.cache/huggingface` (default path)
+- This path is in container overlay filesystem, consuming `/dev/sda1`
 
-**解决方案：**
+**Solution:**
 ```yaml
 env:
 - name: HF_HOME
@@ -747,45 +712,45 @@ env:
 
 volumeMounts:
 - name: models
-  mountPath: /models  # 映射到 /raid/models（hostPath）
+  mountPath: /models  # Maps to /raid/models (hostPath)
 
 volumes:
 - name: models
   hostPath:
-    path: /models  # k3d 容器内路径，对应主机的 /raid/models
+    path: /models  # Path in k3d container, corresponds to /raid/models on host
 ```
 
-### 坑 7: k3d 集群创建失败
+### Issue 7: k3d Cluster Creation Failed
 
-**问题现象：**
+**Symptoms:**
 ```bash
 k3d cluster create mycluster-gpu
 # Error: failed to prepare cluster
 ```
 
-**可能原因和解决方案：**
+**Possible Causes and Solutions:**
 
-1. **镜像问题**
+1. **Image Issue**
 ```bash
-# 确保使用正确的镜像
+# Ensure using correct image
 docker images | grep k3s-cuda
-# 如果镜像有问题，重新构建（见步骤 2）
+# If image has issues, rebuild (see step 2)
 ```
 
-2. **GPU 驱动问题**
+2. **GPU Driver Issue**
 ```bash
-# 检查 NVIDIA 驱动
+# Check NVIDIA driver
 nvidia-smi
 
-# 检查 Docker GPU 支持
+# Check Docker GPU support
 docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
 ```
 
-3. **端口冲突**
+3. **Port Conflict**
 ```bash
-# 检查端口占用
+# Check port usage
 netstat -tuln | grep -E '6443|8080'
-# 删除旧集群
+# Delete old cluster
 k3d cluster delete mycluster-gpu
 ```
 

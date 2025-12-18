@@ -6,14 +6,14 @@ set -e
 echo "🚀 Deploying vLLM API Gateway..."
 echo ""
 
-# 检查 Gateway 代码文件是否存在
+# Check if Gateway code file exists
 if [ ! -f "api-gateway.py" ]; then
     echo "❌ Error: api-gateway.py not found in current directory"
     echo "   Please run this script from the vllm/ directory"
     exit 1
 fi
 
-# 部署 Gateway
+# Deploy Gateway
 echo "📦 Applying api-gateway.yaml..."
 kubectl apply -f api-gateway.yaml
 
