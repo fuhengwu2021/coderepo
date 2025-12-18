@@ -17,40 +17,36 @@ spec:
         app: vllm
         model: phi-tiny-moe
     spec:
+      # 部署到新的 agent 节点 k3d-agent-1-0-56098497
+      nodeSelector:
+        kubernetes.io/hostname: k3d-agent-1-0-56098497
       runtimeClassName: nvidia
       containers:
       - name: vllm-server
-        image: vllm-dev:latest
-        imagePullPolicy: Never  # Use local image, don't pull from registry
-        workingDir: /workspace/vllm
+        image: vllm/vllm-openai:v0.12.0
         command:
-        - /bin/bash
-        - -c
-        - |
-          # Install vLLM in editable mode if not already installed
-          if ! python3 -c "import vllm" 2>/dev/null; then
-            echo "Installing vLLM in editable mode..."
-            pip install -e ".[dev]" --no-build-isolation || pip install -e . --no-build-isolation || true
-          fi
-          
-          # Start vLLM server
-          python3 -m vllm.entrypoints.openai.api_server \
-            --model /models/Phi-tiny-MoE-instruct \
-            --host 0.0.0.0 \
-            --port 8000 \
-            --tensor-parallel-size 1 \
-            --gpu-memory-utilization 0.9
+        - python3
+        - -m
+        - vllm.entrypoints.openai.api_server
+        args:
+        - --model
+        - /models/Phi-tiny-MoE-instruct
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8000"
+        - --tensor-parallel-size
+        - "1"
+        - --gpu-memory-utilization
+        - "0.9"
+        - --trust-remote-code
         env:
-        - name: CUDA_VISIBLE_DEVICES
-          value: "0"
-        - name: PYTHONPATH
-          value: "/workspace/vllm:${PYTHONPATH}"
-        - name: CUDA_HOME
-          value: "/usr/local/cuda"
-        - name: PATH
-          value: "/opt/venv/bin:/usr/local/cuda/bin:${PATH}"
-        - name: LD_LIBRARY_PATH
-          value: "/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
+        - name: HF_HOME
+          value: "/models/hub"
+        - name: TRANSFORMERS_CACHE
+          value: "/models/hub"
+        - name: HF_HUB_CACHE
+          value: "/models/hub"
         resources:
           limits:
             nvidia.com/gpu: 1
@@ -64,18 +60,10 @@ spec:
         volumeMounts:
         - name: models
           mountPath: /models
-          readOnly: true
-        - name: vllm-source
-          mountPath: /workspace/vllm
-          readOnly: true
       volumes:
       - name: models
         hostPath:
-          path: /models
-          type: Directory
-      - name: vllm-source
-        hostPath:
-          path: /vllm
+          path: /models  # k3d 容器内路径，对应主机的 /raid/models
           type: Directory
 ---
 apiVersion: v1

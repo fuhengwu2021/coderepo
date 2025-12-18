@@ -172,9 +172,11 @@ export HF_TOKEN='your_huggingface_token_here'
 echo $HF_TOKEN
 ```
 
-### 7. Deploy vLLM Model
+### 7. Deploy vLLM Models
 
-#### Option A: Using Deployment Script (Recommended)
+#### 7.1 Deploy Llama-3.2-1B-Instruct
+
+##### Option A: Using Deployment Script (Recommended)
 
 ```bash
 cd vllm/
@@ -183,10 +185,10 @@ cd vllm/
 ./deploy-llama-3.2-1b.sh
 ```
 
-#### Option B: Manual Deployment
+##### Option B: Manual Deployment
 
 ```bash
-# Create HF token secret
+# Create HF token secret (if not already created)
 kubectl create secret generic hf-token-secret \
   --from-literal=token="$HF_TOKEN"
 
@@ -197,7 +199,82 @@ kubectl apply -f vllm/llama-3.2-1b.yaml
 kubectl get pod vllm-llama-32-1b -w
 ```
 
-### 8. Test the Deployment
+#### 7.2 Deploy Phi-tiny-MoE-instruct
+
+Phi-tiny-MoE-instruct is deployed to a separate agent node for isolation. The model should be available at `/raid/models/Phi-tiny-MoE-instruct` on the host.
+
+##### Prerequisites
+
+- Model directory exists: `/raid/models/Phi-tiny-MoE-instruct`
+- Additional agent node created (see step 4)
+- GPU available on the target node
+
+##### Option A: Using Deployment Script (Recommended)
+
+```bash
+cd vllm/
+
+# Deploy Phi-tiny-MoE-instruct
+./deploy-phi-tiny-moe.sh
+```
+
+The script will:
+- Check if the cluster exists
+- Verify the model directory exists
+- Deploy the model to the new agent node (`k3d-agent-1-0-56098497`)
+- Wait for the pod to be ready
+
+##### Option B: Manual Deployment
+
+```bash
+# Deploy model (will be scheduled to new agent node via nodeSelector)
+kubectl apply -f vllm/phi-tiny-moe.yaml
+
+# Wait for pod to be ready (model loading may take several minutes)
+kubectl wait --for=condition=Ready pod -l app=vllm,model=phi-tiny-moe --timeout=600s
+
+# Check status
+kubectl get pod -l app=vllm,model=phi-tiny-moe -o wide
+```
+
+##### Configuration Details
+
+The `phi-tiny-moe.yaml` includes:
+- **Node Selection**: Deploys to `k3d-agent-1-0-56098497` via `nodeSelector`
+- **Image**: Uses `vllm/vllm-openai:v0.12.0` (same as llama)
+- **Model Path**: `/models/Phi-tiny-MoE-instruct` (mapped from `/raid/models/Phi-tiny-MoE-instruct`)
+- **GPU**: Requires 1 GPU with sufficient memory
+- **HF Cache**: Configured to use `/models/hub` for HuggingFace cache
+
+##### Troubleshooting
+
+If the pod fails to start:
+
+1. **Check GPU memory availability**:
+   ```bash
+   # Check GPU memory on the target node
+   kubectl describe node k3d-agent-1-0-56098497 | grep -A 5 nvidia.com/gpu
+   ```
+
+2. **Check model path**:
+   ```bash
+   # Verify model exists in k3d container
+   docker exec k3d-agent-1-0-56098497 ls -la /models/Phi-tiny-MoE-instruct
+   ```
+
+3. **Check pod logs**:
+   ```bash
+   kubectl logs -l app=vllm,model=phi-tiny-moe --tail=50
+   ```
+
+4. **Common issues**:
+   - **GPU memory insufficient**: Reduce `--gpu-memory-utilization` in the YAML (default is 0.9)
+   - **Model path not found**: Ensure model is at `/raid/models/Phi-tiny-MoE-instruct` on host
+   - **Node not ready**: Check if the agent node has GPU support and is ready
+
+### 8. Test the Deployments
+
+#### 8.1 Test Llama-3.2-1B-Instruct
 
 ```bash
 # Wait for pod to be ready
@@ -220,6 +297,58 @@ curl http://localhost:8000/v1/chat/completions \
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
+
+#### 8.2 Test Phi-tiny-MoE-instruct
+
+```bash
+# Wait for pod to be ready
+kubectl wait --for=condition=Ready pod -l app=vllm,model=phi-tiny-moe --timeout=600s
+
+# Port forward (use different port to avoid conflict)
+kubectl port-forward svc/vllm-phi-tiny-moe-service 9876:8000
+
+# In another terminal, test health endpoint
+curl http://localhost:9876/health
+
+# Test models endpoint
+curl http://localhost:9876/v1/models
+
+# Test chat completion
+curl http://localhost:9876/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "/models/Phi-tiny-MoE-instruct",
+    "messages": [{"role": "user", "content": "What is a mixture of experts?"}],
+    "max_tokens": 100
+  }'
+```
+
+#### 8.3 Test via API Gateway (Recommended)
+
+If you've deployed the API Gateway (see step 9), you can test both models through a single endpoint:
+
+```bash
+# Port forward Gateway
+kubectl port-forward svc/vllm-api-gateway 8000:8000
+
+# Test llama (automatically routed)
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+
+# Test phi-tiny-moe (automatically routed)
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "/models/Phi-tiny-MoE-instruct",
+    "messages": [{"role": "user", "content": "What is a mixture of experts?"}]
+  }'
+```
+
+The Gateway automatically routes requests to the correct service based on the `model` field in the request body.
 
 ### 9. Deploy API Gateway (Optional but Recommended)
 

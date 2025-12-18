@@ -1,60 +1,161 @@
-# vLLM Deployment for Phi-tiny-MoE-instruct
+# vLLM Deployment Guide
 
-## Current Status
+This directory contains Kubernetes deployment configurations for vLLM models.
 
-✅ **Deployment YAML ready:** `vllm-phi-tiny-moe.yaml`
-- Uses custom `vllm-dev:latest` image
-- Configured for GPU support
-- Model mounted from `/raid/models/Phi-tiny-MoE-instruct`
+## Available Models
 
-❌ **Cluster Issue:** Custom k3s-cuda image has exec problem
-- Missing `/usr/bin/sh` which k3d needs
-- Cluster creation fails during post-start preparation
+### 1. Llama-3.2-1B-Instruct
+- **File**: `llama-3.2-1b.yaml`
+- **Deployment Script**: `deploy-llama-3.2-1b.sh`
+- **Status**: ✅ Deployed and running
+- **Node**: `k3d-mycluster-gpu-agent-0`
 
-## Quick Start (Once Cluster is Fixed)
+### 2. Phi-tiny-MoE-instruct
+- **File**: `phi-tiny-moe.yaml`
+- **Deployment Script**: `deploy-phi-tiny-moe.sh`
+- **Status**: ✅ Deployed and running
+- **Node**: `k3d-agent-1-0-56098497` (separate agent node for isolation)
+
+## Quick Start
+
+### Deploy Llama-3.2-1B-Instruct
 
 ```bash
-# 1. Ensure cluster exists with GPU support
-k3d cluster list
+cd vllm/
+./deploy-llama-3.2-1b.sh
+```
 
-# 2. Deploy vLLM
-kubectl apply -f vllm-phi-tiny-moe.yaml
+### Deploy Phi-tiny-MoE-instruct
 
-# 3. Wait for pod to be ready
+```bash
+cd vllm/
+./deploy-phi-tiny-moe.sh
+```
+
+## Deployment Details
+
+### Phi-tiny-MoE-instruct Configuration
+
+**Key Features:**
+- Uses standard `vllm/vllm-openai:v0.12.0` image (same as llama)
+- Configured for GPU support with `runtimeClassName: nvidia`
+- Model mounted from `/raid/models/Phi-tiny-MoE-instruct` (host) → `/models/Phi-tiny-MoE-instruct` (container)
+- Deployed to dedicated agent node `k3d-agent-1-0-56098497` via `nodeSelector`
+- HF cache configured to use `/models/hub`
+
+**Resource Requirements:**
+- GPU: 1 GPU (with sufficient memory)
+- Memory: 16Gi request, 32Gi limit
+- GPU Memory Utilization: 90% (configurable)
+
+**Prerequisites:**
+- Model directory exists at `/raid/models/Phi-tiny-MoE-instruct` on host
+- Additional agent node created with GPU support (see main README step 4)
+- GPU available on target node
+
+## Manual Deployment
+
+### Phi-tiny-MoE-instruct
+
+```bash
+# Deploy model
+kubectl apply -f phi-tiny-moe.yaml
+
+# Wait for pod to be ready (model loading may take several minutes)
 kubectl wait --for=condition=Ready pod -l app=vllm,model=phi-tiny-moe --timeout=600s
 
-# 4. Port-forward
-kubectl port-forward svc/vllm-phi-tiny-moe-service 8000:8000 &
-
-# 5. Test
-curl http://localhost:8000/health
-curl http://localhost:8000/v1/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "/models/Phi-tiny-MoE-instruct", "prompt": "What is AI?", "max_tokens": 30}'
+# Check status
+kubectl get pod -l app=vllm,model=phi-tiny-moe -o wide
 ```
 
-## Fixing the Custom k3s-cuda Image
+## Testing
 
-The custom image needs `/usr/bin/sh`. To fix:
-
-1. **Option 1: Add symlink in Dockerfile**
-   ```dockerfile
-   RUN ln -s /bin/sh /usr/bin/sh
-   ```
-
-2. **Option 2: Use busybox or ensure shell is in /usr/bin**
-   ```dockerfile
-   RUN apt-get update && apt-get install -y busybox-static
-   ```
-
-3. **Option 3: Rebuild with proper base**
-   - Ensure the base CUDA image has shell utilities
-   - Or copy them from the k3s image properly
-
-## Testing Script
-
-Use `test-vllm-api.sh` to test all endpoints:
+### Direct Service Access
 
 ```bash
-./test-vllm-api.sh http://localhost:8000
+# Port forward
+kubectl port-forward svc/vllm-phi-tiny-moe-service 9876:8000
+
+# Test health
+curl http://localhost:9876/health
+
+# Test chat completion
+curl http://localhost:9876/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "/models/Phi-tiny-MoE-instruct",
+    "messages": [{"role": "user", "content": "What is a mixture of experts?"}],
+    "max_tokens": 100
+  }'
 ```
+
+### Via API Gateway (Recommended)
+
+If API Gateway is deployed, you can access all models through a single endpoint:
+
+```bash
+# Port forward Gateway
+kubectl port-forward svc/vllm-api-gateway 8000:8000
+
+# Test phi-tiny-moe (automatically routed)
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "/models/Phi-tiny-MoE-instruct",
+    "messages": [{"role": "user", "content": "What is a mixture of experts?"}]
+  }'
+```
+
+The Gateway automatically routes requests based on the `model` field in the request body.
+
+## Troubleshooting
+
+### Pod Fails to Start
+
+1. **Check GPU memory availability**:
+   ```bash
+   kubectl describe node k3d-agent-1-0-56098497 | grep -A 5 nvidia.com/gpu
+   ```
+   If GPU memory is insufficient, reduce `--gpu-memory-utilization` in `phi-tiny-moe.yaml` (default is 0.9).
+
+2. **Check model path**:
+   ```bash
+   # Verify model exists in k3d container
+   docker exec k3d-agent-1-0-56098497 ls -la /models/Phi-tiny-MoE-instruct
+   ```
+
+3. **Check pod logs**:
+   ```bash
+   kubectl logs -l app=vllm,model=phi-tiny-moe --tail=50
+   ```
+
+4. **Check pod events**:
+   ```bash
+   kubectl describe pod -l app=vllm,model=phi-tiny-moe | grep -A 10 Events
+   ```
+
+### Common Issues
+
+- **GPU memory insufficient**: Error message shows "Free memory on device is less than desired GPU memory utilization". Solution: Reduce `--gpu-memory-utilization` or free up GPU memory.
+- **Model path not found**: Ensure model is at `/raid/models/Phi-tiny-MoE-instruct` on host.
+- **Node not ready**: Check if the agent node has GPU support and is ready: `kubectl get nodes`.
+
+## File Structure
+
+```
+vllm/
+├── llama-3.2-1b.yaml          # Llama-3.2-1B-Instruct deployment
+├── deploy-llama-3.2-1b.sh    # Llama deployment script
+├── phi-tiny-moe.yaml          # Phi-tiny-MoE-instruct deployment
+├── deploy-phi-tiny-moe.sh     # Phi-tiny-MoE deployment script
+├── api-gateway.yaml           # API Gateway deployment
+├── api-gateway.py             # Gateway Python code (stored in ConfigMap)
+├── deploy-gateway.sh          # Gateway deployment script
+├── test-api.sh                # API testing script
+└── README.md                  # This file
+```
+
+## Additional Resources
+
+- Main README: `../README.md` - Complete setup guide from k3d to vLLM deployment
+- API Gateway: See main README step 9 for Gateway deployment and usage
