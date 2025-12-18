@@ -6,15 +6,23 @@ This directory contains code examples for building a complete production LLM ser
 
 ```
 09/code/
+├── api-gateway.yaml         # API Gateway deployment (auto-routing)
+├── api-gateway.py           # Gateway Python code (stored in ConfigMap)
+├── deploy-gateway.sh        # Gateway deployment script
+├── ingress-tls-traefik.yaml # Traefik Ingress with TLS
+├── ingress-tls.yaml         # Ingress with TLS
+├── ingress.yaml             # Basic Ingress
+├── access-gateway.sh        # Gateway access helper script
+├── add-port-443.sh          # Port configuration script
+├── test-api.sh              # API testing script
 ├── vllm/                    # vLLM server deployment configurations
 │   ├── llama-3.2-1b.yaml    # Llama-3.2-1B-Instruct model deployment (deployed)
 │   ├── phi-tiny-moe.yaml    # Phi-tiny-MoE-instruct model deployment
-│   ├── api-gateway.yaml     # API Gateway deployment (auto-routing)
-│   ├── api-gateway.py       # Gateway Python code (stored in ConfigMap)
 │   ├── deploy-llama-3.2-1b.sh
-│   ├── deploy-gateway.sh    # Gateway deployment script
-│   ├── test-api.sh          # API testing script
 │   └── README.md            # vLLM deployment documentation
+├── sglang/                  # SGLang server deployment configurations
+│   ├── llama-3.2-1b.yaml    # SGLang Llama-3.2-1B-Instruct deployment
+│   └── deploy-llama-3.2-1b.sh
 └── *.py                     # Python 代码示例
 ```
 
@@ -370,7 +378,7 @@ The API Gateway provides a unified entry point that automatically routes request
 #### Deployment Steps
 
 ```bash
-cd vllm/
+cd code/
 
 # Option A: Using deployment script (Recommended)
 ./deploy-gateway.sh
@@ -435,7 +443,7 @@ k3d comes with Traefik by default, and the loadbalancer forwards to Traefik on p
 
 ```bash
 # Apply Traefik Ingress configuration
-kubectl apply -f vllm/ingress-tls-traefik.yaml
+kubectl apply -f ingress-tls-traefik.yaml
 
 # Test access via HTTPS
 curl -k https://localhost/health

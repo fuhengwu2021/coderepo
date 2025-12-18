@@ -9,7 +9,7 @@ echo ""
 # Check if Gateway code file exists
 if [ ! -f "api-gateway.py" ]; then
     echo "❌ Error: api-gateway.py not found in current directory"
-    echo "   Please run this script from the vllm/ directory"
+    echo "   Please run this script from the code/ directory"
     exit 1
 fi
 
