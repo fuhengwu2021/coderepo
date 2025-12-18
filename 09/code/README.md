@@ -304,7 +304,7 @@ curl http://localhost:8000/v1/chat/completions \
 # Wait for pod to be ready
 kubectl wait --for=condition=Ready pod -l app=vllm,model=phi-tiny-moe --timeout=600s
 
-# Port forward (use different port to avoid conflict)
+# Port forward (use different local port to avoid conflict with llama on 8000)
 kubectl port-forward svc/vllm-phi-tiny-moe-service 9876:8000
 
 # In another terminal, test health endpoint
@@ -323,6 +323,8 @@ curl http://localhost:9876/v1/chat/completions \
   }'
 ```
 
+**Note:** Both services use port 8000 internally, but we use different local ports (8000 for llama, 9876 for phi-tiny-moe) when port-forwarding to avoid conflicts.
+
 #### 8.3 Test via API Gateway (Recommended)
 
 If you've deployed the API Gateway (see step 9), you can test both models through a single endpoint:
@@ -336,7 +338,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "messages": [{"role": "user", "content": "Explain mixture of experts in one sentence!"}]
   }'
 
 # Test phi-tiny-moe (automatically routed)
@@ -344,7 +346,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "/models/Phi-tiny-MoE-instruct",
-    "messages": [{"role": "user", "content": "What is a mixture of experts?"}]
+    "messages": [{"role": "user", "content": "Explain mixture of experts in one sentence!"}]
   }'
 ```
 
