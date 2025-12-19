@@ -1,0 +1,109 @@
+# SGLang Serving for Qwen2.5-0.5B-Instruct
+# Direct Pod deployment (fallback if llm-d CRD doesn't work)
+# Note: Qwen/Qwen2.5-0.5B-Instruct is not gated, no HF_TOKEN required
+
+---
+# Secret is optional for Qwen2.5-0.5B-Instruct (not gated)
+# If you need to access other gated models, create secret:
+# kubectl create secret generic hf-token-secret --from-literal=token="$HF_TOKEN"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sglang-qwen2-5-0-5b
+  labels:
+    app: sglang
+    model: qwen2-5-0-5b
+    server: sglang
+spec:
+  runtimeClassName: nvidia
+  containers:
+  - name: sglang-server
+    image: lmsysorg/sglang:v0.5.6.post2-runtime
+    command:
+    - python3
+    - -m
+    - sglang.launch_server
+    args:
+    - --model-path
+    - Qwen/Qwen2.5-0.5B-Instruct
+    - --host
+    - "0.0.0.0"
+    - --port
+    - "8000"
+    - --mem-fraction-static
+    - "0.1"
+    # Note: Qwen2.5-0.5B-Instruct doesn't require --trust-remote-code
+    env:
+    - name: NVIDIA_VISIBLE_DEVICES
+      value: "1"  # Only expose GPU 1 to container (host GPU 1)
+    - name: CUDA_VISIBLE_DEVICES
+      value: "0"  # Use GPU 0 within container (which maps to host GPU 1)
+    - name: CUDA_DEVICE_ORDER
+      value: "PCI_BUS_ID"  # Ensure consistent GPU ordering
+    - name: HF_HOME
+      value: "/models/hub"
+    - name: TRANSFORMERS_CACHE
+      value: "/models/hub"
+    - name: HF_HUB_CACHE
+      value: "/models/hub"
+    # HF_TOKEN is optional for Qwen2.5-0.5B-Instruct (not gated)
+    # Uncomment if you need to access other gated models:
+    # - name: HF_TOKEN
+    #   valueFrom:
+    #     secretKeyRef:
+    #       name: hf-token-secret
+    #       key: token
+    ports:
+    - containerPort: 8000
+      name: http
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+        memory: 8Gi
+      requests:
+        nvidia.com/gpu: 1
+        memory: 6Gi
+    volumeMounts:
+    - name: models
+      mountPath: /models
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      initialDelaySeconds: 60
+      periodSeconds: 10
+      timeoutSeconds: 5
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      initialDelaySeconds: 60
+      periodSeconds: 5
+      timeoutSeconds: 3
+  volumes:
+  - name: models
+    hostPath:
+      path: /models  # Path in k3d container, corresponds to /raid/models on host
+      type: Directory
+  restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-qwen2-5-0-5b
+  labels:
+    app: sglang
+    model: qwen2-5-0-5b
+    server: sglang
+spec:
+  type: ClusterIP
+  selector:
+    app: sglang
+    model: qwen2-5-0-5b
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http

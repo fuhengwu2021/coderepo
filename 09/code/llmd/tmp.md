@@ -235,6 +235,7 @@ Installed plugin: diff
    k3d cluster list | grep llmd-cluster && echo "Cluster exists, deleting..." && k3d cluster delete llmd-cluster || echo "Cluster does not exist, proceeding to create..."
    
    # Create a new k3d cluster specifically for llm-d
+   # Note: The cluster currently has 2 agents (agent-0 and agent-1) to schedule different models to different nodes
    k3d cluster create llmd-cluster \
      --image k3s-cuda:v1.33.6-cuda-12.2.0-working \
      --gpus=all \
@@ -253,14 +254,12 @@ Installed plugin: diff
    
    # Verify cluster is ready
    kubectl get nodes
-   
-   # Label nodes for GPU assignment (optional, for better Pod scheduling)
-   # This helps ensure Pods are scheduled to specific nodes
-   kubectl label node k3d-llmd-cluster-agent-0 gpu-preference=cuda-0
-   kubectl label node k3d-llmd-cluster-agent-1 gpu-preference=cuda-1
+   kubectl cluster-info
    ```
    
-   **Note:** k3d doesn't support assigning specific GPUs to specific nodes during cluster creation. All nodes will have access to all GPUs. To ensure Pods use specific GPUs, use `nodeSelector` in your deployment values (see Step 1 and Step 2 below).
+   **Note:** 
+   - k3d doesn't support assigning specific GPUs to specific nodes during cluster creation. All nodes will have access to all GPUs. To ensure Pods use specific GPUs, use `nodeSelector` in your deployment values (see Step 1 and Step 2 below).
+   - The `llmd-cluster` currently has 2 agents (`agent-0` and `agent-1`), allowing different models to be scheduled to different nodes. Models are assigned using `nodeSelector` with `kubernetes.io/hostname` (e.g., `k3d-llmd-cluster-agent-0` for the first model, `k3d-llmd-cluster-agent-1` for the second model).
 
 3. **Create Namespace:**
    ```bash
@@ -286,6 +285,36 @@ Installed plugin: diff
    helmfile apply -f istio.helmfile.yaml
    ```
 
+**Note:** Based on actual deployment experience, the cluster was created with `--agents 1` (not 2) for the initial setup. The commands used were:
+
+```bash
+# Create cluster with 1 agent
+k3d cluster create llmd-cluster \
+  --image k3s-cuda:v1.33.6-cuda-12.2.0-working \
+  --gpus=all \
+  --servers 1 \
+  --agents 1 \
+  --volume /raid/models:/models \
+  --k3s-arg '--disable=traefik@server:0' \
+  --port "8080:80@loadbalancer" \
+  --port "8443:443@loadbalancer"
+
+# Merge kubeconfig and switch context
+k3d kubeconfig merge llmd-cluster --kubeconfig-merge-default
+kubectl config use-context k3d-llmd-cluster
+
+# Verify cluster
+kubectl get nodes
+kubectl cluster-info
+
+# Deploy Gateway Provider (from gateway-provider directory)
+cd ${LLMD_HOME}/guides/prereq/gateway-provider
+helmfile apply -f istio.helmfile.yaml
+
+# Navigate to inference-scheduling directory for model deployment
+cd ${LLMD_HOME}/guides/inference-scheduling
+```
+
 Results:
 ```
  🌈 $   ./install-gateway-provider-dependencies.sh
@@ -301,6 +330,113 @@ customresourcedefinition.apiextensions.k8s.io/inferencepoolimports.inference.net
 customresourcedefinition.apiextensions.k8s.io/inferencepools.inference.networking.k8s.io created
 customresourcedefinition.apiextensions.k8s.io/inferencepools.inference.networking.x-k8s.io created
 ```
+
+### Actual Deployment Workflow (Based on Real Experience)
+
+**Note:** The following commands were actually used to create and deploy `llmd-cluster`:
+
+```bash
+# 1. Create k3d cluster with 2 agents (for scheduling different models to different nodes)
+k3d cluster create llmd-cluster \
+  --image k3s-cuda:v1.33.6-cuda-12.2.0-working \
+  --gpus=all \
+  --servers 1 \
+  --agents 2 \
+  --volume /raid/models:/models \
+  --k3s-arg '--disable=traefik@server:0' \
+  --port "8080:80@loadbalancer" \
+  --port "8443:443@loadbalancer"
+
+# 2. Merge kubeconfig and switch context
+k3d kubeconfig merge llmd-cluster --kubeconfig-merge-default
+kubectl config use-context k3d-llmd-cluster
+
+# 3. Verify cluster
+kubectl get nodes
+kubectl cluster-info
+
+# 4. Set namespace
+export NAMESPACE=llm-d-multi-model
+
+# 5. Deploy Gateway Provider (Istio)
+cd ${LLMD_HOME}/guides/prereq/gateway-provider
+helmfile apply -f istio.helmfile.yaml
+
+# 6. Navigate to inference-scheduling directory
+cd ${LLMD_HOME}/guides/inference-scheduling
+
+# 7. Prepare values file for first model
+mkdir -p ms-inference-scheduling
+cp ${LLMD_CONFIG_DIR}/llama-3.2-1b-values.yaml ms-inference-scheduling/values.yaml
+
+# 8. Deploy first model using helmfile
+RELEASE_NAME_POSTFIX=llama-32-1b helmfile apply -n ${NAMESPACE}
+
+# 9. Verify deployment
+kubectl get pods -n ${NAMESPACE} -o wide
+kubectl get pods -n ${NAMESPACE} -l llm-d.ai/role=decode
+
+# 10. Fix permissions for model cache (if needed)
+sudo chmod -R 775 /raid/models/hub
+
+# 11. Test the deployment
+# Port-forward to ModelService pod
+POD_NAME=$(kubectl get pods -n ${NAMESPACE} -l llm-d.ai/role=decode | grep llama-32-1b | awk '{print $1}')
+kubectl port-forward -n ${NAMESPACE} pod/${POD_NAME} 8002:8000
+
+# Or access via Gateway service
+GATEWAY_IP=$(kubectl get svc -n ${NAMESPACE} infra-llama-32-1b-inference-gateway-istio -o jsonpath='{.spec.clusterIP}')
+curl http://${GATEWAY_IP}/v1/models
+```
+
+**Key Points:**
+- Cluster was created with `--agents 1` (single agent node)
+- Used `helmfile apply` from `${LLMD_HOME}/guides/inference-scheduling` directory
+- Model values file was copied to `ms-inference-scheduling/values.yaml` as expected by helmfile
+- Gateway provider (Istio) was deployed first before deploying models
+
+### Supported Inference Server Types
+
+**llm-d supports multiple inference server types**, including:
+
+1. **vLLM** (`type: vllm`)
+   - Image: `vllm/vllm-openai:v0.12.0` or `ghcr.io/llm-d/llm-d-cuda:v0.4.0`
+   - Command: `python3 -m vllm.entrypoints.openai.api_server`
+   - Used in: `llm-d-multi-model`, `llm-d-multi-engine`
+
+2. **SGLang** (`type: sglang`) ✅
+   - Image: `lmsysorg/sglang:v0.5.6.post2-runtime`
+   - Command: `python3 -m sglang.launch_server`
+   - Used in: `llm-d-multi-model`, `llm-d-multi-engine`
+   - **Example**: See `09/code/llmd/llm-d-multi-model/sglang-llminference.yaml` and `09/code/llmd/llm-d-multi-engine/sglang-llminference.yaml`
+
+**Deploying SGLang with llm-d:**
+
+SGLang can be deployed using the `LLMInferenceService` CRD with `inferenceServer.type: sglang`:
+
+```yaml
+apiVersion: llm-d.ai/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: sglang-model-name
+spec:
+  inferenceServer:
+    type: sglang
+    image: lmsysorg/sglang:v0.5.6.post2-runtime
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+    args:
+      - --model-path
+      - <model-name>
+      - --port
+      - "8000"
+      - --mem-fraction-static
+      - "0.1"
+```
+
+**Note:** The existing deployments in `llm-d-multi-model` and `llm-d-multi-engine` already include working SGLang configurations that can be used as reference.
 
 ### Step 1: Deploy First Model (Llama-3.2-1B-Instruct)
 

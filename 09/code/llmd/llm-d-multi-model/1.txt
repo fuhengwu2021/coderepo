@@ -1,93 +1,58 @@
-Comparing release=gaie-llama-3.2-1b, chart=/home/fuhwu/.cache/helmfile/oci__registry_k8s_io/gateway-api-inference-extension/charts/inferencepool/v1.2.0-rc.1/inferencepool, namespace=llm-d-multi-model
-Comparing release=ms-llama-3.2-1b, chart=llm-d-modelservice/llm-d-modelservice, namespace=llm-d-multi-model
-in ./helmfile.yaml.gotmpl: 2 errors:
-err 0: command "/usr/local/bin/helm" exited with non-zero status:
-
-PATH:
-  /usr/local/bin/helm
-
-ARGS:
-  0: helm (4 bytes)
-  1: diff (4 bytes)
-  2: upgrade (7 bytes)
-  3: --allow-unreleased (18 bytes)
-  4: ms-llama-3.2-1b (15 bytes)
-  5: llm-d-modelservice/llm-d-modelservice (37 bytes)
-  6: --version (9 bytes)
-  7: v0.3.8 (6 bytes)
-  8: --kube-version (14 bytes)
-  9: 1.33.6+k3s1 (11 bytes)
-  10: --namespace (11 bytes)
-  11: llm-d-multi-model (17 bytes)
-  12: --values (8 bytes)
-  13: /tmp/helmfile4108810738/llm-d-multi-model-ms-llama-3.2-1b-values-677b9c9b8c (75 bytes)
-  14: --reset-values (14 bytes)
-  15: --detailed-exitcode (19 bytes)
-  16: --color (7 bytes)
-
-ERROR:
-  exit status 1
-
-EXIT STATUS
-  1
-
-STDERR:
-  Error: Failed to render chart: exit status 1: Error: values don't meet the specifications of the schema(s) in the following chart(s):
-  llm-d-modelservice:
-  - at '/decode/nodeSelector': additional properties 'gpu-preference' not allowed
-  Error: plugin "diff" exited with error
-
-COMBINED OUTPUT:
-  ********************
-  	Release was not present in Helm.  Diff will show entire contents as new.
-  ********************
-  Error: Failed to render chart: exit status 1: Error: values don't meet the specifications of the schema(s) in the following chart(s):
-  llm-d-modelservice:
-  - at '/decode/nodeSelector': additional properties 'gpu-preference' not allowed
-  Error: plugin "diff" exited with error
-err 1: command "/usr/local/bin/helm" exited with non-zero status:
-
-PATH:
-  /usr/local/bin/helm
-
-ARGS:
-  0: helm (4 bytes)
-  1: diff (4 bytes)
-  2: upgrade (7 bytes)
-  3: --allow-unreleased (18 bytes)
-  4: gaie-llama-3.2-1b (17 bytes)
-  5: /home/fuhwu/.cache/helmfile/oci__registry_k8s_io/gateway-api-inference-extension/charts/inferencepool/v1.2.0-rc.1/inferencepool (127 bytes)
-  6: --version (9 bytes)
-  7: v1.2.0-rc.1 (11 bytes)
-  8: --kube-version (14 bytes)
-  9: 1.33.6+k3s1 (11 bytes)
-  10: --namespace (11 bytes)
-  11: llm-d-multi-model (17 bytes)
-  12: --values (8 bytes)
-  13: /tmp/helmfile709114108/llm-d-multi-model-gaie-llama-3.2-1b-values-5f9447f87c (76 bytes)
-  14: --values (8 bytes)
-  15: /tmp/helmfile4214358294/llm-d-multi-model-gaie-llama-3.2-1b-values-64c6b49769 (77 bytes)
-  16: --values (8 bytes)
-  17: /tmp/helmfile2652583217/llm-d-multi-model-gaie-llama-3.2-1b-values-869db8599 (76 bytes)
-  18: --reset-values (14 bytes)
-  19: --detailed-exitcode (19 bytes)
-  20: --color (7 bytes)
-
-ERROR:
-  exit status 1
-
-EXIT STATUS
-  1
-
-STDERR:
-  Error: Failed to render chart: exit status 1: Error: unable to build kubernetes objects from release manifest: resource mapping not found for name: "gaie-llama-3.2-1b-epp-monitor" namespace: "llm-d-multi-model" from "": no matches for kind "ServiceMonitor" in version "monitoring.coreos.com/v1"
-  ensure CRDs are installed first
-  Error: plugin "diff" exited with error
-
-COMBINED OUTPUT:
-  ********************
-  	Release was not present in Helm.  Diff will show entire contents as new.
-  ********************
-  Error: Failed to render chart: exit status 1: Error: unable to build kubernetes objects from release manifest: resource mapping not found for name: "gaie-llama-3.2-1b-epp-monitor" namespace: "llm-d-multi-model" from "": no matches for kind "ServiceMonitor" in version "monitoring.coreos.com/v1"
-  ensure CRDs are installed first
-  Error: plugin "diff" exited with error
+k3d cluster create llmd-cluster   --image k3s-cuda:v1.33.6-cuda-12.2.0-working   --gpus=all   --servers 1   --agents 1   --volume /raid/models:/models   --k3s-arg '--disable=traefik@server:0'   --port "8080:80@loadbalancer"   --port "8443:443@loadbalancer"
+kubectl get ns
+kubectl get pods
+k3d kubeconfig merge llmd-cluster --kubeconfig-merge-default
+kubectl config use-context k3d-llmd-cluster
+kubectl get nodes
+# 这会自动检查并删除旧集群
+k3d cluster list | grep llmd-cluster && k3d cluster delete llmd-cluster
+# 然后创建新集群（按照文档中的完整命令）
+kubectl cluster-info
+vi ~/.kube/config
+cat ~/.kube/config
+helmfile apply -f istio.helmfile.yaml
+cd ${LLMD_HOME}/guides/inference-scheduling
+# Deploy first model with custom release name
+RELEASE_NAME_POSTFIX=llama-3.2-1b helmfile apply -n ${NAMESPACE}   --set-file ms-llama-3.2-1b.values[0]=${LLMD_CONFIG_DIR}/llama-3.2-1b-values.yaml
+cd ${LLMD_HOME}/guides/inference-scheduling
+# Create directory and copy custom values file
+# Note: helmfile expects ms-inference-scheduling/values.yaml, so we'll use that path
+mkdir -p ms-inference-scheduling
+cp ${LLMD_CONFIG_DIR}/llama-3.2-1b-values.yaml ms-inference-scheduling/values.yaml
+# Deploy first model with custom release name
+RELEASE_NAME_POSTFIX=llama-3.2-1b helmfile apply -n ${NAMESPACE}
+kubectl get nodes
+kubectl get pods
+kubectl get ns
+kubectl get pods
+export NAMESPACE=llm-d-multi-model && kubectl get pods -n ${NAMESPACE} -o wide
+export NAMESPACE=llm-d-multi-model && kubectl get pods -n ${NAMESPACE}
+ll /raid/models
+export NAMESPACE=llm-d-multi-model && kubectl get pods -n ${NAMESPACE}
+nvidia-smi
+curl http://localhost:8000/v1/models
+curl http://localhost:8000/v1/models |jq
+ll /raid/models/
+ll /raid/models/Phi-tiny-MoE-instruct/
+ll /raid/models/hub
+#sudo chmod 777 /raid/models/hub
+sudo chmod -R 775 /raid/models/hub
+docker ps -a
+df -h
+kubectl get pods
+export NAMESPACE=llm-d-multi-model && kubectl get pods -n ${NAMESPACE} -o wide
+export NAMESPACE=llm-d-multi-model && kubectl get pod -n ${NAMESPACE} -l llm-d.ai/role=decode
+export NAMESPACE=llm-d-multi-model && kubectl get pods -n ${NAMESPACE} -l llm-d.ai/role=decode
+export NAMESPACE=llm-d-multi-model
+# Option 1: Port-forward directly to ModelService pod (recommended for testing)
+POD_NAME=$(kubectl get pods -n ${NAMESPACE} -l llm-d.ai/role=decode | grep llama-32-1b | awk '{print $1}')
+kubectl port-forward -n ${NAMESPACE} pod/${POD_NAME} 8002:8000
+# Get Gateway service ClusterIP
+export NAMESPACE=llm-d-multi-model
+GATEWAY_IP=$(kubectl get svc -n ${NAMESPACE} infra-llama-32-1b-inference-gateway-istio -o jsonpath='{.spec.clusterIP}')
+echo "Gateway IP: ${GATEWAY_IP}"
+# List Available Models (from within cluster)
+curl http://${GATEWAY_IP}/v1/models
+curl http://localhost:8003/v1/models
+cd /home/fuhwu/workspace/coderepo/extra
+gss
