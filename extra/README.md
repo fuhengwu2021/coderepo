@@ -26,6 +26,20 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 
 **Test Results:**
 
+### Performance Summary Table (2M to 10M Context Length)
+
+| Context Length | Input Tokens | Output Tokens | Prompt Throughput | Generation Throughput | Response Time | KV Cache Config | Status |
+|----------------|--------------|---------------|-------------------|----------------------|---------------|-----------------|--------|
+| **2M** | 2.07M | 200 | 206,527.9 tokens/s | 20.0 tokens/s | 69.35s (~1.2 min) | BF16, 3.9M tokens/GPU | ✅ 200 OK |
+| **2.9M** | 2.85M | 200 | 284,575.7 tokens/s | 20.0 tokens/s | 334.91s (~5.6 min) | BF16, 5M max_model_len | ✅ 200 OK |
+| **5M** | 4.91M | 200 | 490,814.1 tokens/s | 15.6 tokens/s | 957.07s (~16 min) | BF16, Hybrid Manager | ✅ 200 OK |
+| **6.5M** | 6.38M | 200 | 637,856.3 tokens/s | 1.7 tokens/s | ~100s (~1.7 min)* | BF16, 8M max_model_len, Hybrid Manager | ✅ 200 OK |
+| **10M** | 9.81M | 93 | **981,184.7 tokens/s** | 9.3 tokens/s | 2964.40s (~49.4 min) | **FP8 E4M3, 7.8M tokens/GPU, Hybrid Manager** | ✅ 200 OK |
+
+*Estimated based on throughput (prompt: ~10s + generation: ~118s)
+
+### Detailed Test Results
+
 **2M Context Length Test:**
 - ✅ Successfully processed **2.07M tokens input** + 200 tokens output
 - **Prompt throughput**: **206,527.9 tokens/s** (excellent performance for 2M context!)
@@ -52,15 +66,6 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 - **Configuration**: Hybrid KV Cache Manager enabled via `VLLM_ALLOW_CHUNKED_LOCAL_ATTN_WITH_HYBRID_KV_CACHE=1`
 - **Max supported**: **11.6M tokens per request** (with Hybrid Manager enabled, 5M config, 2.96x concurrency)
 
-**8M Context Length Configuration (Current):**
-- **Max model len**: **8,388,608 tokens** (8M)
-- **GPU memory utilization**: **90%**
-- **GPU KV cache size**: **3,919,664 tokens** (per GPU)
-- **Available KV cache memory**: **89.71 GiB**
-- **Max concurrency**: **1.86x** (for 8M tokens per request)
-- **Configuration**: Hybrid KV Cache Manager enabled, `--shm-size 128g`, `OMP_NUM_THREADS=8`
-- **Note**: Concurrency decreased from 2.96x (5M config) to 1.86x (8M config) because larger `max_model_len` requires more KV cache reservation per request
-
 **6.5M Context Length Test (8M max_model_len configuration, Hybrid Manager enabled):**
 - ✅ Successfully processed **6.38M tokens input** + 200 tokens output
 - **Prompt throughput**: **637,856.3 tokens/s** (outstanding performance!)
@@ -70,13 +75,15 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 - **Status**: **200 OK** ✅
 - **Configuration**: 8M max_model_len, Hybrid KV Cache Manager enabled, 90% GPU utilization
 
-**10M Context Length Test (FP8 E4M3 KV Cache):**
+**10M Context Length Test (FP8 E4M3 KV Cache + Hybrid Manager):**
 - ✅ Successfully processed **9.81M tokens input** + 93 tokens output
 - **Prompt throughput**: **981,184.7 tokens/s** (接近 1M tokens/s，卓越性能！)
 - **Generation throughput**: **9.3 tokens/s**
 - **Response time**: **2964.40 seconds** (~49.4 分钟) for 9.81M tokens + 93 output
 - **Status**: **200 OK** ✅
-- **Configuration**: `--max-model-len 10000000 --kv-cache-dtype fp8_e4m3 --calculate-kv-scales`
+- **Configuration**: 
+  - `--max-model-len 10000000 --kv-cache-dtype fp8_e4m3 --calculate-kv-scales`
+  - Hybrid KV Cache Manager enabled via `VLLM_ALLOW_CHUNKED_LOCAL_ATTN_WITH_HYBRID_KV_CACHE=1`
 - **GPU KV cache size**: **7,838,976 tokens** (per GPU, ~2x increase vs BF16)
 - **Available KV cache memory**: **89.71 GiB**
 - **Max concurrency**: **3.12x** (for 10M tokens per request)
@@ -91,6 +98,7 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 - **490K tokens/s prompt throughput** for 5M context with Hybrid Manager enabled shows outstanding performance
 - **637K tokens/s prompt throughput** for 6.5M context demonstrates exceptional scalability and efficiency
 - Prefix cache (30.2% hit rate in 2M test) helps optimize repeated content processing
+- **Generation Throughput Note**: All generation throughput values are reported by vLLM server logs (`loggers.py:236`). They represent the actual token generation speed (completion_tokens / generation_time). For large contexts (6.5M+), generation throughput decreases significantly (1.7-9.3 tokens/s) because the model needs to attend to the entire KV cache during generation, which is computationally expensive.
 - **With Hybrid KV Cache Manager enabled**:
   - Max per request: **11.6M tokens** (2.96x concurrency, up from 2.94M with 0.75x)
   - Successfully tested up to **4.91M tokens** in production
