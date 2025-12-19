@@ -1,0 +1,55 @@
+Upgrading release=istio-base, chart=/home/fuhwu/.cache/helmfile/oci__gcr_io/istio-testing/charts/base/1.28-alpha.89f30b26ba71bf5e538083a4720d0bc2d8c06401/base, namespace=istio-system
+Release "istio-base" does not exist. Installing it now.
+NAME: istio-base
+LAST DEPLOYED: Fri Dec 19 05:13:34 2025
+NAMESPACE: istio-system
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+NOTES:
+Istio base successfully installed!
+
+To learn more about the release, try:
+  $ helm status istio-base -n istio-system
+  $ helm get all istio-base -n istio-system
+
+Listing releases matching ^istio-base$
+istio-base	istio-system	1       	2025-12-19 05:13:34.172148975 +0000 UTC	deployed	base-1.28-alpha.89f30b26ba71bf5e538083a4720d0bc2d8c06401	1.28-alpha.89f30b26ba71bf5e538083a4720d0bc2d8c06401
+
+Upgrading release=istiod, chart=/home/fuhwu/.cache/helmfile/oci__gcr_io/istio-testing/charts/istiod/1.28-alpha.89f30b26ba71bf5e538083a4720d0bc2d8c06401/istiod, namespace=istio-system
+Release "istiod" does not exist. Installing it now.
+NAME: istiod
+LAST DEPLOYED: Fri Dec 19 05:13:35 2025
+NAMESPACE: istio-system
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+NOTES:
+"istiod" successfully installed!
+
+To learn more about the release, try:
+  $ helm status istiod -n istio-system
+  $ helm get all istiod -n istio-system
+
+Next steps:
+  * Deploy a Gateway: https://istio.io/latest/docs/setup/additional-setup/gateway/
+  * Try out our tasks to get started on common configurations:
+    * https://istio.io/latest/docs/tasks/traffic-management
+    * https://istio.io/latest/docs/tasks/security/
+    * https://istio.io/latest/docs/tasks/policy-enforcement/
+  * Review the list of actively supported releases, CVE publications and our hardening guide:
+    * https://istio.io/latest/docs/releases/supported-releases/
+    * https://istio.io/latest/news/security/
+    * https://istio.io/latest/docs/ops/best-practices/security/
+
+For further documentation see https://istio.io website
+
+Listing releases matching ^istiod$
+istiod	istio-system	1       	2025-12-19 05:13:35.317543467 +0000 UTC	deployed	istiod-1.28-alpha.89f30b26ba71bf5e538083a4720d0bc2d8c06401	1.28-alpha.89f30b26ba71bf5e538083a4720d0bc2d8c06401
+
+
+UPDATED RELEASES:
+NAME         NAMESPACE      CHART                                      VERSION                                               DURATION
+istio-base   istio-system   oci://gcr.io/istio-testing/charts/base     1.28-alpha.89f30b26ba71bf5e538083a4720d0bc2d8c06401         1s
+istiod       istio-system   oci://gcr.io/istio-testing/charts/istiod   1.28-alpha.89f30b26ba71bf5e538083a4720d0bc2d8c06401         1s
+

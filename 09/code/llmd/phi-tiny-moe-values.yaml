@@ -1,0 +1,65 @@
+multinode: false
+
+modelArtifacts:
+  uri: "/models/Phi-tiny-MoE-instruct"  # Local path from k3d volume mount
+  name: "/models/Phi-tiny-MoE-instruct"
+  size: 30Gi
+  authSecretName: ""  # Not needed for local model
+
+routing:
+  servicePort: 8000
+  proxy:
+    image: ghcr.io/llm-d/llm-d-routing-sidecar:v0.4.0-rc.1
+    connector: nixlv2
+    secure: false
+
+decode:
+  create: true
+  replicas: 1
+  extraConfig:
+    runtimeClassName: nvidia  # Required for k3d GPU access
+    nodeSelector:
+      kubernetes.io/hostname: k3d-llmd-cluster-agent-1  # Schedule to agent-1
+    securityContext:
+      fsGroup: 0  # Set group to root so pod can write to /models/hub
+  containers:
+  - name: "vllm"
+    image: ghcr.io/llm-d/llm-d-cuda:v0.4.0  # Updated to v0.4.0 (may have newer vLLM version)
+    modelCommand: vllmServe
+    args:
+      - "--disable-uvicorn-access-log"
+      - "--trust-remote-code"  # Required for PhiMoE models
+      - "--gpu-memory-utilization"
+      - "0.9"
+    env:
+      - name: CUDA_DEVICE_ORDER
+        value: "PCI_BUS_ID"  # Ensure consistent GPU ordering
+      # Note: Removed CUDA_VISIBLE_DEVICES to let Kubernetes GPU scheduling handle it
+      # The nodeSelector ensures pod runs on agent-1, and nvidia.com/gpu resource request
+      # will allocate one GPU. vLLM will use the allocated GPU automatically.
+      - name: HF_HOME
+        value: "/models/hub"  # Now writable after permission fix
+      - name: TRANSFORMERS_CACHE
+        value: "/models/hub"
+      - name: HF_HUB_CACHE
+        value: "/models/hub"
+    resources:
+      limits:
+        nvidia.com/gpu: "1"
+        memory: 32Gi
+      requests:
+        nvidia.com/gpu: "1"
+        memory: 16Gi
+    mountModelVolume: false  # Using hostPath volume instead
+    volumeMounts:
+    - name: models
+      mountPath: /models
+      readOnly: false  # Allow vLLM to write cache to /models/hub
+  volumes:
+  - name: models
+    hostPath:
+      path: /models  # k3d maps /raid/models (host) to /models (container)
+      type: Directory
+
+prefill:
+  create: false
