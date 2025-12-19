@@ -177,6 +177,8 @@ Based on SGLang source code analysis, the following options may help reduce GPU 
 
 **Recommendation**: For 10M+ context length, use **vLLM** which successfully supports it with FP8 E4M3 + Hybrid KV Cache Manager. If SGLang is required, consider testing with CPU offload options or reducing context length to 5M-6M tokens.
 
+**Root Cause Analysis**: See `SGLANG_VS_VLLM_MEMORY_ANALYSIS.md` for detailed analysis. The key difference is that **SGLang uses static pre-allocation** for KV cache pool (requires full capacity upfront), while **vLLM uses dynamic paged allocation** (allocates on-demand). This causes SGLang to OOM during model loading when trying to pre-allocate KV cache for 10M context.
+
 **Performance Analysis:**
 - **2M context**: Processing 2M+ tokens in ~6.7 minutes demonstrates SGLang can handle large contexts
   - Slower than vLLM (403s vs 69s), but still functional
@@ -269,6 +271,14 @@ For **2M context length** with Llama-4-Scout-17B-16E-Instruct:
 ### Documentation
 - `HYBRID_KV_CACHE_ANALYSIS.md` - Detailed analysis of vLLM's Hybrid KV Cache Manager
 - `SGLANG_HYBRID_KV_CACHE.md` - Analysis of SGLang's Hybrid KV Cache support
+- `SGLANG_VS_VLLM_MEMORY_ANALYSIS.md` - **Root cause analysis**: Why SGLang uses more memory than vLLM for large contexts
+- `SGLANG_DYNAMIC_ALLOCATION_PROSCONS.md` - **Pros and cons analysis**: Static pre-allocation vs dynamic on-demand allocation for SGLang
+- `SGLANG_VRAM_LIMITED_DYNAMIC_ALLOCATION.md` - **VRAM-limited dynamic allocation**: Why SGLang can't simply set VRAM limit and allocate dynamically
+- `RADIX_CACHE_FIXED_POOL_ANALYSIS.md` - **Technical deep dive**: Why Radix Cache requires fixed-size pre-allocated pool and whether dynamic allocation is possible
+- `SGLANG_DESIGN_LIMITATIONS.md` - **Design limitations summary**: Why SGLang's fixed-size pre-allocation design doesn't work for large contexts (10M+ tokens)
+- `SKIPLIST_FOR_RADIX_CACHE_ANALYSIS.md` - **Skip List analysis**: Whether Skip List can replace Radix Cache's fixed pool design
+- `SEGMENTED_POOL_VS_PAGEDATTENTION.md` - **Concept comparison**: What is Segmented Pool and how it differs from PagedAttention (PA)
+- `WHY_SEGMENTED_POOL_NOT_USED.md` - **Historical analysis**: Why segmented pool is not used in SGLang and what are the barriers
 - `deploy-vllm-llama-4-scout.sh` - Kubernetes deployment script for vLLM
 - `deploy-sglang-llama-4-scout.sh` - Kubernetes deployment script for SGLang
 
