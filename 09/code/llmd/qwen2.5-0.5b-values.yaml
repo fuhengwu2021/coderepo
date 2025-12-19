@@ -32,7 +32,7 @@ decode:
       - "--gpu-memory-utilization"
       - "0.1"  # Use 10% of GPU memory (target: ~14GB out of 140GB)
       - "--max-model-len"
-      - "32768"  # Set to 32K for demo (model supports longer context, but 32K keeps GPU usage reasonable)
+      - "32768"  # Set to 32K as model supports 32K
     env:
       - name: NVIDIA_VISIBLE_DEVICES
         value: "1"  # Only expose GPU 1 to container (host GPU 1)
