@@ -1,0 +1,141 @@
+# ConfigMap for API Gateway code
+# This ConfigMap should be created from api-gateway.py file using:
+#   ./update-configmap.sh
+# Or manually:
+#   kubectl create configmap engine-comparison-gateway-code \
+#     --from-file=api-gateway.py=api-gateway.py \
+#     --namespace=default \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+# The ConfigMap is referenced by the Deployment below.
+# DO NOT embed Python code directly in this YAML file.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: engine-comparison-gateway-code
+  namespace: llm-d-multi-engine
+  annotations:
+    note: "This ConfigMap is generated from api-gateway.py. Run ./update-configmap.sh to update."
+# Note: The 'data' section is intentionally empty here.
+# The actual api-gateway.py content is populated by running:
+#   ./update-configmap.sh
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: engine-comparison-gateway
+  namespace: llm-d-multi-engine
+  labels:
+    app: engine-comparison-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: engine-comparison-gateway
+  template:
+    metadata:
+      labels:
+        app: engine-comparison-gateway
+    spec:
+      # Deploy to agent nodes, avoid control-plane
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: DoesNotExist
+      tolerations:
+        - operator: "Exists"
+      serviceAccountName: engine-comparison-gateway
+      containers:
+      - name: gateway
+        image: python:3.11-slim
+        command:
+        - /bin/bash
+        - -c
+        - |
+          pip install fastapi uvicorn httpx kubernetes -q
+          python /app/api-gateway.py
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: gateway-code
+          mountPath: /app
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: gateway-code
+        configMap:
+          name: engine-comparison-gateway-code
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: engine-comparison-gateway
+  namespace: llm-d-multi-engine
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: engine-comparison-gateway
+  namespace: llm-d-multi-engine
+rules:
+- apiGroups: [""]
+  resources: ["services", "pods", "endpoints"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: engine-comparison-gateway
+  namespace: llm-d-multi-engine
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: engine-comparison-gateway
+subjects:
+- kind: ServiceAccount
+  name: engine-comparison-gateway
+  namespace: llm-d-multi-engine
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: engine-comparison-gateway
+  namespace: llm-d-multi-engine
+  labels:
+    app: engine-comparison-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: engine-comparison-gateway
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http

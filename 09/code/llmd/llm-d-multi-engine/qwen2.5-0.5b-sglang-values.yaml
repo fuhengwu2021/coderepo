@@ -19,29 +19,35 @@ decode:
   extraConfig:
     runtimeClassName: nvidia  # Required for k3d GPU access
     nodeSelector:
-      kubernetes.io/hostname: k3d-llmd-multiengine-agent-0  # Schedule to agent-0
+      kubernetes.io/hostname: k3d-llmd-multiengine-agent-0  # Schedule to agent-0 (same as vLLM)
     securityContext:
       fsGroup: 0  # Set group to root so pod can write to /models/hub
   containers:
-  - name: "vllm"
-    image: ghcr.io/llm-d/llm-d-cuda:v0.4.0  # Updated to v0.4.0
-    modelCommand: vllmServe
+  - name: "sglang"
+    image: lmsysorg/sglang:v0.5.6.post2-runtime  # Use official SGLang image
+    modelCommand: custom  # Use custom command for SGLang
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
     args:
-      - "--disable-uvicorn-access-log"
-      # Note: Qwen2.5-0.5B-Instruct doesn't require --trust-remote-code
-      - "--gpu-memory-utilization"
-      - "0.05"  # Use 5% of GPU memory (target: ~7GB out of 140GB) - reduced due to limited free memory
-      - "--max-model-len"
-      - "32768"  # Set to 32K as model supports 32K
+      - --model-path
+      - Qwen/Qwen2.5-0.5B-Instruct
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --mem-fraction-static
+      - "0.1"  # Use 10% of GPU memory
     env:
       - name: NVIDIA_VISIBLE_DEVICES
-        value: "0"  # Only expose GPU 0 to container (host GPU 0)
+        value: "1"  # Only expose GPU 1 to container (host GPU 1)
       - name: CUDA_VISIBLE_DEVICES
-        value: "0"  # Use GPU 0 within container (which maps to host GPU 0)
+        value: "0"  # Use GPU 0 within container (which maps to host GPU 1)
       - name: CUDA_DEVICE_ORDER
         value: "PCI_BUS_ID"  # Ensure consistent GPU ordering
       - name: HF_HOME
-        value: "/models/hub"  # Now writable after permission fix
+        value: "/models/hub"
       - name: TRANSFORMERS_CACHE
         value: "/models/hub"
       - name: HF_HUB_CACHE

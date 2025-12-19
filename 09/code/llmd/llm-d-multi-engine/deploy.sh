@@ -138,40 +138,63 @@ echo "Step 3: Installing llm-d framework"
 echo "=========================================="
 echo ""
 
-# Add Helm repo
-if helm repo list | grep -q llm-d; then
-    echo "✅ llm-d Helm repo already added"
-else
-    echo "📦 Adding llm-d Helm repository..."
-    helm repo add llm-d https://llm-d.ai/charts || {
-        echo "⚠️  Warning: Failed to add llm-d Helm repo. This might be expected if the repo URL has changed."
-        echo "   Continuing with direct Pod deployment instead..."
+# Add Helm repos if not already added
+if ! helm repo list | grep -q llm-d-infra; then
+    echo "📦 Adding llm-d-infra Helm repository..."
+    helm repo add llm-d-infra https://llm-d-incubation.github.io/llm-d-infra/ || {
+        echo "⚠️  Warning: Failed to add llm-d-infra Helm repo."
         USE_LLMD_CRD=false
     }
-    helm repo update
 fi
 
-# Install llm-d
+if ! helm repo list | grep -q llm-d-modelservice; then
+    echo "📦 Adding llm-d-modelservice Helm repository..."
+    helm repo add llm-d-modelservice https://llm-d-incubation.github.io/llm-d-modelservice/ || {
+        echo "⚠️  Warning: Failed to add llm-d-modelservice Helm repo."
+    }
+fi
+
 if [ "${USE_LLMD_CRD:-true}" = "true" ]; then
-    if helm list -n llm-d | grep -q llm-d; then
-        echo "✅ llm-d already installed"
+    helm repo update
+    echo "✅ Helm repos updated"
+fi
+
+# Install llm-d-infra (this installs CRDs and controller for LLMInferenceService)
+if [ "${USE_LLMD_CRD:-true}" = "true" ]; then
+    if helm list -n llm-d 2>/dev/null | grep -q llm-d-infra; then
+        echo "✅ llm-d-infra already installed"
+    elif kubectl get crd llminferenceservices.llm-d.ai &>/dev/null; then
+        echo "✅ LLMInferenceService CRD already exists (may have been installed manually)"
     else
-        echo "📦 Installing llm-d framework..."
-        helm install llm-d llm-d/llm-d \
+        echo "📦 Installing llm-d-infra (installs LLMInferenceService CRD and controller)..."
+        if helm install llm-d-infra llm-d-infra/llm-d-infra \
           --namespace llm-d \
           --create-namespace \
           --wait \
-          --timeout 5m || {
-            echo "⚠️  Warning: llm-d Helm installation failed or timed out."
+          --timeout 10m; then
+            echo "✅ llm-d-infra installed successfully"
+        else
+            echo "⚠️  Warning: llm-d-infra Helm installation failed or timed out."
             echo "   This might be expected if the Helm chart is not available."
             echo "   Falling back to direct Pod deployment..."
             USE_LLMD_CRD=false
-        }
+        fi
     fi
     
     if [ "${USE_LLMD_CRD:-true}" = "true" ]; then
-        echo "✅ llm-d framework installed"
-        kubectl get pods -n llm-d
+        echo ""
+        echo "🔍 Verifying llm-d installation..."
+        if kubectl get crd llminferenceservices.llm-d.ai &>/dev/null; then
+            echo "✅ LLMInferenceService CRD found"
+            kubectl get crd | grep llm-d
+        else
+            echo "⚠️  LLMInferenceService CRD not found. CRDs may need more time to be installed."
+            echo "   You can check with: kubectl get crd | grep llm-d"
+        fi
+        
+        echo ""
+        echo "📦 llm-d pods:"
+        kubectl get pods -n llm-d 2>/dev/null || echo "⚠️  No pods found in llm-d namespace (this may be normal if only CRDs are installed)"
     fi
 fi
 echo ""
