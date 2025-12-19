@@ -143,12 +143,14 @@ llm-d provides a production-grade solution using:
 └───────────────────────────┬─────────────────────────────────┘
                             │
                             │ HTTP Request with 'model' field
+                            │ (Unified Interface: Single Endpoint)
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │         Inference Gateway (Kubernetes Gateway API)          │
 │  - Load balancing with prefix-cache awareness               │
 │  - Intelligent request scheduling                           │
 │  - Traffic routing to InferencePool                         │
+│  - Unified Interface: /v1/chat/completions                 │
 └───────────────┬─────────────────────────────────────────────┘
                 │
                 ▼
@@ -157,6 +159,7 @@ llm-d provides a production-grade solution using:
 │  - Routes requests to appropriate ModelService              │
 │  - Model-aware request distribution                         │
 │  - Health checking and load balancing                       │
+│  - Unified Interface: Routes by 'model' field               │
 └───────────────┬───────────────────────────┬─────────────────┘
                 │                           │
                 │                           │
@@ -164,6 +167,24 @@ llm-d provides a production-grade solution using:
     │  ModelService 1      │    │  ModelService 2     │
     │  (Llama-3.2-1B)      │    │  (Qwen2.5-0.5B)     │
     │  vLLM Pods (1x)      │    │  vLLM Pods (1x)     │
+    └──────────────────────┘    └─────────────────────┘
+
+Alternative: Custom API Gateway (Advanced Unified Interface)
+┌─────────────────────────────────────────────────────────────┐
+│              Custom API Gateway (Optional)                  │
+│  - Unified Interface: /v1/chat/completions                  │
+│  - Routes by 'model' + 'owned_by' fields                    │
+│  - Supports header-based routing (x-owned-by)                │
+│  - Admin API for dynamic routing management                  │
+└───────────────┬───────────────────────────┬─────────────────┘
+                │                           │
+                │ Direct routing to        │
+                │ ModelServices            │
+                │ (bypasses InferencePool) │
+                │                           │
+    ┌───────────▼──────────┐    ┌───────────▼─────────┐
+    │  ModelService 1      │    │  ModelService 2     │
+    │  (Llama-3.2-1B)      │    │  (Qwen2.5-0.5B)     │
     └──────────────────────┘    └─────────────────────┘
 ```
 
@@ -663,7 +684,155 @@ You can use the custom API Gateway **instead of** or **in front of** the Inferen
 - **Option A**: Use Gateway only (bypass InferencePool) - Gateway routes directly to ModelServices
 - **Option B**: Use Gateway → InferencePool → ModelServices - Gateway routes to InferencePool, which then routes to ModelServices (if InferencePool supports owned_by routing in the future)
 
-### Step 6: Test Multi-Model Routing
+### Step 6: Using the Unified Interface
+
+**✅ Yes, llm-d cluster supports unified interface!**
+
+Once deployed, all requests can go through a unified interface (single endpoint) that automatically routes to the correct model service. You have **two options** for unified interface:
+
+#### Option 1: InferencePool Gateway (Default - Basic Unified Interface)
+
+The InferencePool Gateway provides a unified interface that routes based on `model` field only.
+
+**Access via InferencePool Gateway:**
+
+```bash
+export NAMESPACE=llm-d-multi-model
+
+# Port-forward to InferencePool Gateway
+kubectl port-forward -n ${NAMESPACE} svc/infra-llama-32-1b-inference-gateway-istio 8080:80
+
+# In another terminal, use the unified interface
+# 1. List all available models
+curl http://localhost:8080/v1/models
+```
+
+**Response:**
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "meta-llama/Llama-3.2-1B-Instruct",
+      "object": "model",
+      "created": 0,
+      "owned_by": "vllm"
+    },
+    {
+      "id": "Qwen/Qwen2.5-0.5B-Instruct",
+      "object": "model",
+      "created": 0,
+      "owned_by": "vllm"
+    }
+  ]
+}
+```
+
+**2. Chat Completion with Llama Model (using unified interface):**
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "messages": [
+      {"role": "user", "content": "What is machine learning?"}
+    ],
+    "max_tokens": 100
+  }'
+```
+
+**3. Chat Completion with Qwen Model (using unified interface):**
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen2.5-0.5B-Instruct",
+    "messages": [
+      {"role": "user", "content": "What is machine learning?"}
+    ],
+    "max_tokens": 100
+  }'
+```
+
+**Key Features:**
+- ✅ **Unified Interface**: Single endpoint (`/v1/chat/completions`) for all models
+- ✅ **Automatic Routing**: Routes based on `model` field in request body
+- ✅ **Model Discovery**: Aggregates model lists from all ModelServices (`/v1/models`)
+- ⚠️ **Limitation**: Only routes by `model` field, not by `owned_by` (inference engine type)
+
+#### Option 2: Custom API Gateway (Advanced Unified Interface with owned_by support)
+
+The Custom API Gateway provides a unified interface that routes based on both `model` and `owned_by` fields.
+
+**Access via Custom API Gateway:**
+
+```bash
+export NAMESPACE=llm-d-multi-model
+
+# Port-forward to Custom API Gateway
+kubectl port-forward -n ${NAMESPACE} svc/llmd-api-gateway 8003:8000
+
+# In another terminal, use the unified interface
+# 1. List all available models
+curl http://localhost:8003/v1/models
+```
+
+**2. Chat Completion with owned_by in request body:**
+
+```bash
+curl http://localhost:8003/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "owned_by": "vllm",
+    "messages": [
+      {"role": "user", "content": "What is machine learning?"}
+    ],
+    "max_tokens": 100
+  }'
+```
+
+**3. Chat Completion with owned_by in HTTP header:**
+
+```bash
+curl http://localhost:8003/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "x-owned-by: vllm" \
+  -d '{
+    "model": "Qwen/Qwen2.5-0.5B-Instruct",
+    "messages": [
+      {"role": "user", "content": "What is machine learning?"}
+    ],
+    "max_tokens": 100
+  }'
+```
+
+**Key Features:**
+- ✅ **Unified Interface**: Single endpoint (`/v1/chat/completions`) for all models
+- ✅ **Advanced Routing**: Routes based on both `model` and `owned_by` fields
+- ✅ **Multiple Input Sources**: Reads `owned_by` from request body, HTTP header, or query parameters
+- ✅ **Model Discovery**: Aggregates model lists from all ModelServices (`/v1/models`)
+- ✅ **Admin API**: Dynamic routing configuration management
+
+#### Comparison: Unified Interface Options
+
+| Feature | InferencePool Gateway | Custom API Gateway |
+|---------|----------------------|-------------------|
+| **Unified Interface** | ✅ | ✅ |
+| **Single Endpoint** | ✅ | ✅ |
+| **Route by `model`** | ✅ | ✅ |
+| **Route by `owned_by`** | ❌ | ✅ |
+| **Header-based routing** | ❌ | ✅ |
+| **Admin API** | ❌ | ✅ |
+| **Auto Service Discovery** | ✅ | ✅ |
+
+**Recommendation:**
+- Use **InferencePool Gateway** if you only need routing by `model` field (simpler, production-ready)
+- Use **Custom API Gateway** if you need routing by both `model` and `owned_by` fields (advanced use cases)
+
+### Step 7: Test Multi-Model Routing
 
 **For k3d clusters, use port-forward to access the service:**
 
@@ -700,42 +869,18 @@ kubectl port-forward -n ${NAMESPACE} svc/infra-llama-32-1b-inference-gateway-ist
 curl -X GET http://localhost:8080/v1/models
 ```
 
-**Or use the Gateway service directly (if accessible):**
+**Or use the Gateway service directly from within cluster:**
 
 ```bash
-# Get Gateway service ClusterIP
+# Option A: InferencePool Gateway (basic unified interface)
 export NAMESPACE=llm-d-multi-model
 GATEWAY_IP=$(kubectl get svc -n ${NAMESPACE} infra-llama-32-1b-inference-gateway-istio -o jsonpath='{.spec.clusterIP}')
-echo "Gateway IP: ${GATEWAY_IP}"
+echo "InferencePool Gateway IP: ${GATEWAY_IP}"
 
-# List Available Models (from within cluster)
+# List Available Models
 curl http://${GATEWAY_IP}/v1/models
-```
 
-**Response:**
-```json
-{
-  "object": "list",
-  "data": [
-    {
-      "id": "meta-llama/Llama-3.2-1B-Instruct",
-      "object": "model",
-      "created": 0,
-      "owned_by": "vllm"
-    },
-    {
-      "id": "Qwen/Qwen2.5-0.5B-Instruct",
-      "object": "model",
-      "created": 0,
-      "owned_by": "vllm"
-    }
-  ]
-}
-```
-
-**3. Request to Llama Model:**
-
-```bash
+# Request to any model (unified interface)
 curl http://${GATEWAY_IP}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -745,15 +890,20 @@ curl http://${GATEWAY_IP}/v1/chat/completions \
     ],
     "max_tokens": 100
   }'
-```
 
-**4. Request to Qwen2.5-0.5B-Instruct Model:**
+# Option B: Custom API Gateway (advanced unified interface with owned_by support)
+CUSTOM_GATEWAY_IP=$(kubectl get svc -n ${NAMESPACE} llmd-api-gateway -o jsonpath='{.spec.clusterIP}')
+echo "Custom API Gateway IP: ${CUSTOM_GATEWAY_IP}"
 
-```bash
-curl http://${GATEWAY_IP}/v1/chat/completions \
+# List Available Models
+curl http://${CUSTOM_GATEWAY_IP}:8000/v1/models
+
+# Request with owned_by in body
+curl http://${CUSTOM_GATEWAY_IP}:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen/Qwen2.5-0.5B-Instruct",
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "owned_by": "vllm",
     "messages": [
       {"role": "user", "content": "What is machine learning?"}
     ],
@@ -764,12 +914,14 @@ curl http://${GATEWAY_IP}/v1/chat/completions \
 ### Key Advantages of llm-d Approach
 
 1. **Production-Ready**: Tested and benchmarked configurations
-2. **Intelligent Routing**: Prefix-cache aware and load-aware balancing
-3. **Automatic Discovery**: InferencePool automatically discovers ModelService instances
-4. **Monitoring**: Built-in Prometheus metrics and Grafana dashboards
-5. **Scalability**: Easy to add more models or scale replicas
-6. **Multi-Hardware Support**: Works with NVIDIA, AMD, Intel XPU, Google TPU
-7. **Advanced Features**: Supports prefill/decode disaggregation, expert parallelism, etc.
+2. **Unified Interface**: Single endpoint for all models - both InferencePool Gateway and Custom API Gateway provide unified interfaces
+3. **Intelligent Routing**: Prefix-cache aware and load-aware balancing
+4. **Automatic Discovery**: InferencePool automatically discovers ModelService instances
+5. **Monitoring**: Built-in Prometheus metrics and Grafana dashboards
+6. **Scalability**: Easy to add more models or scale replicas
+7. **Multi-Hardware Support**: Works with NVIDIA, AMD, Intel XPU, Google TPU
+8. **Advanced Features**: Supports prefill/decode disaggregation, expert parallelism, etc.
+9. **Flexible Routing**: Choose between basic (model-only) or advanced (model + owned_by) unified interface
 
 **Customization Options:**
 - **Plugin System**: llm-d's InferencePool supports plugin-based customization via `pluginsCustomConfig`. You can configure custom filters, scorers, and pickers to customize routing behavior.
@@ -794,7 +946,10 @@ curl http://${GATEWAY_IP}/v1/chat/completions \
 - ✅ Gateway and HTTPRoute are configured
 - ✅ InferencePool automatically discovers ModelService instances via label selector `llm-d.ai/inferenceServing=true`
 - ✅ Models accessible: `/raid/models` (host) → `/models` (k3d container) → `/models` (pod via hostPath)
-- ✅ **API Testing**: First model successfully accepts curl requests via port-forward
+- ✅ **API Testing**: Both models successfully accept curl requests via port-forward
+- ✅ **Unified Interface**: Both InferencePool Gateway and Custom API Gateway provide unified interfaces
+  - InferencePool Gateway: Basic unified interface (routes by `model` field only)
+  - Custom API Gateway: Advanced unified interface (routes by `model` + `owned_by` fields)
 
 **Model Storage Configuration:**
 - **Host path**: `/raid/models` (where models are stored on host machine)
@@ -855,11 +1010,13 @@ curl -X POST http://localhost:8002/v1/completions \
 | Feature | k3d (Manual) | llm-d (Production) |
 |---------|--------------|---------------------|
 | **Setup Complexity** | Manual YAML files | Helm charts (automated) |
+| **Unified Interface** | ✅ Custom API Gateway | ✅ InferencePool Gateway + Optional Custom Gateway |
 | **Routing** | Custom API Gateway | Inference Gateway (K8s native) |
 | **Load Balancing** | Basic round-robin | Intelligent (prefix-cache aware) |
 | **Monitoring** | Manual setup | Built-in Prometheus/Grafana |
 | **Scaling** | Manual pod management | HPA-ready, autoscaling support |
 | **Multi-Model** | Manual service mapping | Automatic discovery |
 | **Production Features** | Limited | Full production stack |
+| **owned_by Routing** | ✅ Supported | ✅ Supported (via Custom Gateway) |
 
 
