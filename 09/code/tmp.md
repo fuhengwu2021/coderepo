@@ -174,16 +174,16 @@ Alternative: Custom API Gateway (Advanced Unified Interface with owned_by suppor
 │              Custom API Gateway (Optional)                  │
 │  - Unified Interface: /v1/chat/completions                  │
 │  - Routes by 'model' + 'owned_by' fields                    │
-│  - Supports header-based routing (x-owned-by)                │
-│  - Admin API for dynamic routing management                  │
+│  - Supports header-based routing (x-owned-by)               │
+│  - Admin API for dynamic routing management                 │
 └───────────────┬─────────────────────────────────────────────┘
                 │
                 │ Routes to InferencePool Gateway
                 │ (preserves intelligent scheduling)
                 ▼
 ┌─────────────────────────────────────────────────────────────┐
-│         InferencePool Gateway (Kubernetes Gateway API)     │
-│  - Intelligent routing, load balancing                     │
+│         InferencePool Gateway (Kubernetes Gateway API)      │
+│  - Intelligent routing, load balancing                      │
 │  - Prefix-cache awareness                                   │
 └───────────────┬─────────────────────────────────────────────┘
                 │
@@ -718,6 +718,59 @@ The custom API Gateway is designed to **work with InferencePool Gateway**, not b
 - ✅ Production-ready and battle-tested
 - ✅ Kubernetes Gateway API integration for advanced traffic management
 
+```
+ 🚀 $k get pods
+NAME                                                         READY   STATUS    RESTARTS   AGE
+gaie-llama-32-1b-epp-5f8479848-7tlk8                         1/1     Running   0          3h17m
+infra-llama-32-1b-inference-gateway-istio-56b9656d76-4pjj5   1/1     Running   0          3h17m
+llmd-api-gateway-794ffd5f74-tm4zz                            1/1     Running   0          12m
+ms-llama-32-1b-llm-d-modelservice-decode-74485b6976-fnt2v    2/2     Running   0          113m
+ms-qwen2-5-0-5b-llm-d-modelservice-decode-74d49c849f-4xjq7   2/2     Running   0          113m
+```
+
+**Pod Architecture Explanation:**
+
+When you run `kubectl get pods -n llm-d-multi-model`, you will see 5 pods (or more if you scale up). This is the expected llm-d production architecture:
+
+1. **InferencePool Gateway** (`infra-*-inference-gateway-istio`):
+   - Kubernetes Gateway API implementation
+   - Provides unified entry point for all requests
+   - Handles intelligent routing and load balancing
+   - Routes requests to InferencePool based on `model` field
+
+2. **InferencePool EPP** (`gaie-*-epp`):
+   - Extension Point Processor for InferencePool
+   - Implements intelligent scheduling plugins (queue scoring, KV cache utilization, prefix-cache awareness)
+   - Processes routing decisions based on real-time metrics
+   - Communicates with ModelService pods via routing sidecars
+
+3. **Custom API Gateway** (`llmd-api-gateway`) - Optional:
+   - Provides `owned_by` field routing support
+   - Routes requests to InferencePool Gateway (preserves intelligent scheduling)
+   - Automatically discovers services from Kubernetes
+   - Admin API for dynamic routing management
+
+4. **ModelService Pods** (`ms-*-decode`) - 2 pods, each with 2/2 Ready:
+   - Each pod contains:
+     - **vLLM container**: Actual model inference engine (runs the LLM model)
+     - **routing-proxy sidecar**: Communicates with InferencePool for intelligent scheduling
+   - `2/2 Ready` means both containers in the pod are running successfully
+   - One pod per model (Llama and Qwen in this example)
+
+**Why so many pods?**
+
+This is llm-d's production-ready architecture that provides:
+- ✅ **Intelligent request scheduling** (not just round-robin) - routes based on queue depth, KV cache utilization
+- ✅ **Load balancing** - distributes requests across replicas based on real-time metrics
+- ✅ **Prefix-cache awareness** - routes requests to pods with matching prefix cache for better performance
+- ✅ **Health checking and automatic failover** - automatically routes away from unhealthy pods
+- ✅ **Kubernetes-native integration** - uses Gateway API for standard Kubernetes traffic management
+- ✅ **Scalability** - easy to add more models or scale replicas
+- ✅ **High availability** - multiple components ensure system resilience
+
+All components work together to provide a production-grade LLM serving solution with intelligent scheduling and optimal resource utilization.
+
+
 ### Step 6: Using the Unified Interface
 
 **✅ Yes, llm-d cluster supports unified interface!**
@@ -976,7 +1029,7 @@ curl http://${CUSTOM_GATEWAY_IP}:8000/v1/chat/completions \
 **Current Status:**
 - ✅ Cluster `llmd-cluster` is running with 3 nodes (1 server + 2 agents)
 - ✅ All pods are deployed in `llm-d-multi-model` namespace
-- ✅ **Correct Architecture**: 1 InferencePool Gateway + 1 InferencePool + 2 ModelService pods + 1 Custom API Gateway
+- ✅ **Correct Architecture**: 1 InferencePool Gateway + 1 InferencePool EPP + 2 ModelService pods + 1 Custom API Gateway
 - ✅ First model (llama-32-1b) is running (2/2 Ready) and **accepting curl requests** ✓
 - ✅ Second model (qwen2-5-0-5b) is running (2/2 Ready) and **accepting curl requests** ✓
 - ✅ InferencePool Gateway and HTTPRoute are configured
