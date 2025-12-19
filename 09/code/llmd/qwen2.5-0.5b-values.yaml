@@ -30,13 +30,16 @@ decode:
       - "--disable-uvicorn-access-log"
       # Note: Qwen2.5-0.5B-Instruct doesn't require --trust-remote-code
       - "--gpu-memory-utilization"
-      - "0.9"
+      - "0.1"  # Use 10% of GPU memory (target: ~14GB out of 140GB)
+      - "--max-model-len"
+      - "32768"  # Set to 32K for demo (model supports longer context, but 32K keeps GPU usage reasonable)
     env:
+      - name: NVIDIA_VISIBLE_DEVICES
+        value: "1"  # Only expose GPU 1 to container (host GPU 1)
+      - name: CUDA_VISIBLE_DEVICES
+        value: "0"  # Use GPU 0 within container (which maps to host GPU 1)
       - name: CUDA_DEVICE_ORDER
         value: "PCI_BUS_ID"  # Ensure consistent GPU ordering
-      # Note: Removed CUDA_VISIBLE_DEVICES to let Kubernetes GPU scheduling handle it
-      # The nodeSelector ensures pod runs on agent-1, and nvidia.com/gpu resource request
-      # will allocate one GPU. vLLM will use the allocated GPU automatically.
       - name: HF_HOME
         value: "/models/hub"  # Now writable after permission fix
       - name: TRANSFORMERS_CACHE

@@ -26,9 +26,15 @@ decode:
     modelCommand: vllmServe
     args:
       - "--disable-uvicorn-access-log"
+      - "--gpu-memory-utilization"
+      - "0.1"  # Use 10% of GPU memory (target: ~14GB out of 140GB)
+      - "--max-model-len"
+      - "8192"  # Limit to 8K for demo (model supports 128K via rope_scaling, but 8K keeps GPU usage <10%)
     env:
+      - name: NVIDIA_VISIBLE_DEVICES
+        value: "0"  # Only expose GPU 0 to container (host GPU 0)
       - name: CUDA_VISIBLE_DEVICES
-        value: "0"  # Use GPU 0 on agent-0
+        value: "0"  # Use GPU 0 within container
     resources:
       limits:
         nvidia.com/gpu: "1"
