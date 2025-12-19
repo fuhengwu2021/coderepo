@@ -15,6 +15,14 @@
 #   --tensor-parallel-size <num>   Tensor parallel size (default: 8)
 #   --port <num>                   Server port (default: 8000)
 #   --shm-size <size>              Shared memory size (default: 10g)
+#   --cpu-offload-gb <num>         CPU offload size in GB (default: 0, for 10M context workaround)
+#   --offload-group-size <num>     Offload V2: layers per group (default: -1, disabled)
+#   --offload-num-in-group <num>   Offload V2: layers to offload per group (default: 1)
+#   --offload-mode <mode>          Offload V2: cpu, meta, shm_cpu, sharded_gpu (default: cpu)
+#   --enable-memory-saver          Enable memory-saving optimizations
+#   --enable-weights-cpu-backup     Backup model weights to CPU memory
+#   --disable-radix-cache          Disable radix cache to save memory
+#   --delete-ckpt-after-loading    Delete checkpoint after loading to free memory
 #   --help                         Show this help message
 #
 # 使用示例 (Examples):
@@ -42,10 +50,36 @@
 # 5. 完整配置示例（10M + FP8 + HiCache）:
 #    ./run-sglang-docker.sh \
 #      --context-length 10000000 \
-#      --kv-cache-dtype fp8_e5m2 \
+#      --kv-cache-dtype fp8_e4m3 \
 #      --mem-fraction-static 0.80 \
 #      --enable-hierarchical-cache \
 #      --hicache-ratio 2.0 \
+#      --shm-size 128g
+#
+# 6. 10M context with CPU offload (workaround for OOM):
+#    ./run-sglang-docker.sh \
+#      --context-length 10000000 \
+#      --kv-cache-dtype fp8_e4m3 \
+#      --mem-fraction-static 0.70 \
+#      --enable-hierarchical-cache \
+#      --hicache-ratio 2.0 \
+#      --cpu-offload-gb 20 \
+#      --enable-memory-saver \
+#      --enable-weights-cpu-backup \
+#      --disable-radix-cache \
+#      --delete-ckpt-after-loading \
+#      --shm-size 128g
+#
+# 7. 10M context with Offload V2 (layer-wise CPU offloading):
+#    ./run-sglang-docker.sh \
+#      --context-length 10000000 \
+#      --kv-cache-dtype fp8_e4m3 \
+#      --mem-fraction-static 0.70 \
+#      --enable-hierarchical-cache \
+#      --hicache-ratio 2.0 \
+#      --offload-group-size 4 \
+#      --offload-num-in-group 2 \
+#      --offload-mode cpu \
 #      --shm-size 128g
 #
 # 6. 查看帮助信息:
@@ -65,6 +99,14 @@ TENSOR_PARALLEL_SIZE=8
 SHM_SIZE="10g"
 ENABLE_HIERARCHICAL_CACHE=false
 HICACHE_RATIO=2.0
+CPU_OFFLOAD_GB=0
+OFFLOAD_GROUP_SIZE=-1
+OFFLOAD_NUM_IN_GROUP=1
+OFFLOAD_MODE="cpu"
+ENABLE_MEMORY_SAVER=false
+ENABLE_WEIGHTS_CPU_BACKUP=false
+DISABLE_RADIX_CACHE=false
+DELETE_CKPT_AFTER_LOADING=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -101,6 +143,38 @@ while [[ $# -gt 0 ]]; do
             SHM_SIZE="$2"
             shift 2
             ;;
+        --cpu-offload-gb)
+            CPU_OFFLOAD_GB="$2"
+            shift 2
+            ;;
+        --offload-group-size)
+            OFFLOAD_GROUP_SIZE="$2"
+            shift 2
+            ;;
+        --offload-num-in-group)
+            OFFLOAD_NUM_IN_GROUP="$2"
+            shift 2
+            ;;
+        --offload-mode)
+            OFFLOAD_MODE="$2"
+            shift 2
+            ;;
+        --enable-memory-saver)
+            ENABLE_MEMORY_SAVER=true
+            shift
+            ;;
+        --enable-weights-cpu-backup)
+            ENABLE_WEIGHTS_CPU_BACKUP=true
+            shift
+            ;;
+        --disable-radix-cache)
+            DISABLE_RADIX_CACHE=true
+            shift
+            ;;
+        --delete-ckpt-after-loading)
+            DELETE_CKPT_AFTER_LOADING=true
+            shift
+            ;;
         --help)
             grep -A 30 "^# Usage:" "$0" | head -30
             exit 0
@@ -120,9 +194,28 @@ echo "  - Context length: ${CONTEXT_LENGTH} tokens"
 echo "  - KV cache dtype: ${KV_CACHE_DTYPE}"
 echo "  - Memory fraction static: ${MEM_FRACTION_STATIC}"
 echo "  - Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
+echo "  - CUDA graph: disabled (saves 4-10GB per GPU)"
 echo "  - HiCache enabled: ${ENABLE_HIERARCHICAL_CACHE}"
 if [ "$ENABLE_HIERARCHICAL_CACHE" = true ]; then
     echo "  - HiCache ratio: ${HICACHE_RATIO}"
+fi
+if [ "$CPU_OFFLOAD_GB" -gt 0 ]; then
+    echo "  - CPU offload: ${CPU_OFFLOAD_GB} GB"
+fi
+if [ "$OFFLOAD_GROUP_SIZE" -gt 0 ]; then
+    echo "  - Offload V2: group-size=${OFFLOAD_GROUP_SIZE}, num-in-group=${OFFLOAD_NUM_IN_GROUP}, mode=${OFFLOAD_MODE}"
+fi
+if [ "$ENABLE_MEMORY_SAVER" = true ]; then
+    echo "  - Memory saver: enabled"
+fi
+if [ "$ENABLE_WEIGHTS_CPU_BACKUP" = true ]; then
+    echo "  - Weights CPU backup: enabled"
+fi
+if [ "$DISABLE_RADIX_CACHE" = true ]; then
+    echo "  - Radix cache: disabled"
+fi
+if [ "$DELETE_CKPT_AFTER_LOADING" = true ]; then
+    echo "  - Delete checkpoint after loading: enabled"
 fi
 echo ""
 
@@ -198,6 +291,14 @@ docker run -d \
     $([ "$KV_CACHE_DTYPE" != "auto" ] && echo "--kv-cache-dtype ${KV_CACHE_DTYPE}") \
     $([ "$ENABLE_HIERARCHICAL_CACHE" = true ] && echo "--enable-hierarchical-cache") \
     $([ "$ENABLE_HIERARCHICAL_CACHE" = true ] && echo "--hicache-ratio ${HICACHE_RATIO}") \
+    $([ "$CPU_OFFLOAD_GB" -gt 0 ] && echo "--cpu-offload-gb ${CPU_OFFLOAD_GB}") \
+    $([ "$OFFLOAD_GROUP_SIZE" -gt 0 ] && echo "--offload-group-size ${OFFLOAD_GROUP_SIZE}") \
+    $([ "$OFFLOAD_GROUP_SIZE" -gt 0 ] && echo "--offload-num-in-group ${OFFLOAD_NUM_IN_GROUP}") \
+    $([ "$OFFLOAD_GROUP_SIZE" -gt 0 ] && echo "--offload-mode ${OFFLOAD_MODE}") \
+    $([ "$ENABLE_MEMORY_SAVER" = true ] && echo "--enable-memory-saver") \
+    $([ "$ENABLE_WEIGHTS_CPU_BACKUP" = true ] && echo "--enable-weights-cpu-backup") \
+    $([ "$DISABLE_RADIX_CACHE" = true ] && echo "--disable-radix-cache") \
+    $([ "$DELETE_CKPT_AFTER_LOADING" = true ] && echo "--delete-ckpt-after-loading") \
     --disable-cuda-graph \
     --trust-remote-code
 

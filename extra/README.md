@@ -126,27 +126,66 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 
 **Conclusion:** vLLM v0.12.0 **works** for Llama-4-Scout with 2M context length on 8x H200.
 
-### ✅ SGLang v0.5.6.post2-runtime - SUCCESS
+### ⚠️ SGLang v0.5.6.post2-runtime - PARTIAL SUCCESS
+
+**Note:** SGLang was tested at 2M context length (successful) and 10M context length (failed due to OOM).
 
 **Configuration:**
 - Image: `lmsysorg/sglang:v0.5.6.post2-runtime`
 - Tensor Parallel Size: 8
-- Context Length: 2,097,152 tokens
-- Memory Fraction Static: 0.80
+- Context Length: 2,097,152 tokens (2M) - ✅ Success
+- Context Length: 10,000,000 tokens (10M) - ❌ Failed (OOM)
+- Memory Fraction Static: 0.80 (2M), 0.65-0.80 (10M attempts)
 - CUDA Graph: Disabled (to avoid OOM with 2M context)
-- **HiCache (Hierarchical Cache)**: **Not enabled** (can be enabled with `--enable-hierarchical-cache --hicache-ratio 2.0` to support up to 10M tokens on 8xH200)
+- **HiCache (Hierarchical Cache)**: **Enabled for 10M test** (`--enable-hierarchical-cache --hicache-ratio 2.0`)
 
-**Test Results:**
+**Test Results (2M Context Length):**
 - ✅ Successfully processed **2.097M tokens input** + 200 tokens output
 - **Response time**: **403.07 seconds** (~6.7 minutes) for 2.097M tokens + 200 output
 - **Output length**: 792 characters
 - **Status**: **200 OK** ✅
 
+**Test Results (10M Context Length):**
+- ❌ **Failed to start** - Continuous OOM (Out of Memory) errors during model loading
+- **Attempted configurations:**
+  - `kv-cache-dtype: fp8_e4m3` ✅
+  - `mem-fraction-static: 0.80 → 0.75 → 0.70 → 0.65` (all failed)
+  - `enable-hierarchical-cache: true` with `hicache-ratio: 2.0` ✅
+  - `shm-size: 128g` ✅
+  - `disable-cuda-graph: true` ✅ **Always disabled** (hardcoded in script to save 4-10GB per GPU)
+- **Error**: `torch.OutOfMemoryError: CUDA out of memory` on multiple GPUs
+- **Memory usage**: ~139-140 GB / 140 GB per GPU (near 100% utilization)
+- **Status**: ❌ **Cannot start server**
+- **Note**: CUDA graph was already disabled in all tests. Enabling it would require even more memory (4-10GB per GPU), making OOM worse.
+
+**Potential Workarounds (Not Yet Tested):**
+Based on SGLang source code analysis, the following options may help reduce GPU memory usage during model loading:
+1. **CPU Offload** (`--cpu-offload-gb <GB>`): Offload model weights to CPU memory
+   - Example: `--cpu-offload-gb 20` (offload 20GB of weights to CPU)
+   - **Note**: Requires sufficient CPU RAM and may impact inference latency
+2. **Offload V2** (`--offload-group-size`, `--offload-num-in-group`, `--offload-mode cpu`): Layer-wise CPU offloading
+   - Example: `--offload-group-size 4 --offload-num-in-group 2 --offload-mode cpu`
+   - **Note**: More advanced but may have compatibility constraints (e.g., `tp_size=1` for some modes)
+3. **Memory Saver** (`--enable-memory-saver`): Enable memory-saving optimizations
+   - Uses `release_memory_occupation` and `resume_memory_occupation` APIs
+4. **Weights CPU Backup** (`--enable-weights-cpu-backup`): Backup model weights to CPU
+   - Saves weights to CPU during memory release operations
+5. **Disable Radix Cache** (`--disable-radix-cache`): Disable prefix caching to save memory
+   - **Trade-off**: Loses prefix cache optimization benefits
+6. **Delete Checkpoint After Loading** (`--delete-ckpt-after-loading`): Free checkpoint memory after model load
+   - May help if checkpoint is still in memory
+
+**Recommendation**: For 10M+ context length, use **vLLM** which successfully supports it with FP8 E4M3 + Hybrid KV Cache Manager. If SGLang is required, consider testing with CPU offload options or reducing context length to 5M-6M tokens.
+
 **Performance Analysis:**
-- Processing 2M+ tokens in ~6.7 minutes demonstrates SGLang can handle large contexts
-- Slower than vLLM (403s vs 69s), but still functional
-- No OOM errors with CUDA graph disabled
-- Successfully completed the full 2M context test
+- **2M context**: Processing 2M+ tokens in ~6.7 minutes demonstrates SGLang can handle large contexts
+  - Slower than vLLM (403s vs 69s), but still functional
+  - No OOM errors with CUDA graph disabled
+  - Successfully completed the full 2M context test
+- **10M context**: SGLang's memory management strategy differs from vLLM
+  - Even with FP8 E4M3 KV cache and HiCache enabled, SGLang cannot fit 10M context in 8x H200
+  - Memory allocation during model loading exceeds available GPU memory
+  - **Comparison with vLLM**: vLLM successfully supports 10M context with FP8 E4M3 + Hybrid Manager
 
 **Token Generation Strategy:**
 - Uses **smart sampling** with **random starting position** to avoid prefix caching
@@ -154,7 +193,10 @@ This directory contains scripts and configurations to test if vLLM and SGLang ca
 - Same strategy as vLLM for consistency
 - Actual result: **2,097,151 tokens** (exactly at target)
 
-**Conclusion:** SGLang v0.5.6.post2-runtime **works** for Llama-4-Scout with 2M context length on 8x H200, but is slower than vLLM.
+**Conclusion:** 
+- ✅ SGLang v0.5.6.post2-runtime **works** for Llama-4-Scout with **2M context length** on 8x H200, but is slower than vLLM
+- ❌ SGLang **cannot support 10M context length** on 8x H200, even with FP8 E4M3 KV cache and HiCache enabled
+- **Recommendation**: For 10M+ context length, use **vLLM** which successfully supports it with FP8 E4M3 + Hybrid KV Cache Manager
 
 ### Performance Comparison
 
@@ -318,11 +360,13 @@ Wait for: `Application startup complete.`
 ### SGLang Configuration
 - **Image**: `lmsysorg/sglang:v0.5.6.post2-runtime`
 - **Tensor Parallel Size**: 8 (8x H200)
-- **Context Length**: 2,097,152 tokens (2M)
-- **Memory Fraction**: 0.80 (conservative for 2M context)
-- **CUDA Graph**: Disabled (`--disable-cuda-graph`) to save memory
-  - **Why disabled**: CUDA graph requires 4-10GB extra memory per GPU for 2M context
-  - **Trade-off**: ~5-15% performance loss, but avoids OOM and saves ~32-80GB total memory
+- **Context Length**: 2,097,152 tokens (2M) or 10,000,000 tokens (10M)
+- **Memory Fraction**: 0.80 (2M) or 0.65-0.80 (10M attempts)
+- **CUDA Graph**: **Always disabled** (`--disable-cuda-graph`) - hardcoded in script
+  - **Why disabled**: CUDA graph requires 4-10GB extra memory per GPU
+  - **Memory savings**: ~32-80GB total across 8 GPUs
+  - **Trade-off**: ~5-15% performance loss, but essential to avoid OOM for large contexts
+  - **For 10M context**: Enabling CUDA graph would make OOM worse (requires even more memory)
 
 ## FP8 Quantization Technical Details
 
@@ -489,18 +533,26 @@ curl http://localhost:8000/v1/models
 8. ✅ **CUDA graph disabled** in SGLang for 2M context to avoid OOM
 9. ✅ **FP8 E4M3 KV cache** enables ~2x capacity (7.8M tokens vs 3.9M tokens per GPU)
 10. ✅ **FP8 E4M3 required** when using `--calculate-kv-scales` (E5M2 not supported for Activations)
-11. ✅ **10M context length** successfully tested with FP8 E4M3 KV cache on 8x H200
+11. ✅ **vLLM supports 10M context length** with FP8 E4M3 KV cache on 8x H200
     - **9.81M tokens processed** with **981K tokens/s prompt throughput**
     - **Response time**: ~49.4 minutes for 9.81M tokens + 93 output tokens
     - **Status**: 200 OK ✅
+    - **Configuration**: FP8 E4M3 + Hybrid KV Cache Manager
+12. ❌ **SGLang cannot support 10M context length** on 8x H200
+    - **Failed to start** with continuous OOM errors during model loading
+    - **Tested configurations**: FP8 E4M3 KV cache, HiCache enabled (ratio=2.0), mem-fraction-static 0.65-0.80
+    - **Memory usage**: ~139-140 GB / 140 GB per GPU (near 100% utilization)
+    - **Conclusion**: SGLang's memory management strategy cannot fit 10M context in 8x H200, even with optimizations
+    - **Recommendation**: Use vLLM for 10M+ context length requirements
 
 ## Next Steps
 
-1. ✅ **Test SGLang** - Completed
+1. ✅ **Test SGLang** - Completed (2M: ✅ Success, 10M: ❌ Failed)
 2. **Concurrency testing**: 50 concurrent requests (as per requirements)
 3. **Variable context testing**: 10K to 2M tokens
 4. **Production deployment**: Use Kubernetes configs if needed
 5. **Performance optimization**: Investigate SGLang performance improvements
+6. **SGLang 10M context**: Consider testing with smaller context lengths (5M, 6M) or accept limitation
 
 ## References
 
