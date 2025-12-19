@@ -50,6 +50,9 @@ ROUTING_CONFIG: Dict[Tuple[str, Optional[str]], str] = {
     # ("meta-llama/Llama-3.2-1B-Instruct", "vllm"): "ms-llama-32-1b-llm-d-modelservice-decode",
     # ("Qwen/Qwen2.5-0.5B-Instruct", "vllm"): "ms-qwen2-5-0-5b-llm-d-modelservice-decode",
 }
+
+# Cache pod IPs by model name for direct access
+POD_IP_CACHE: Dict[str, str] = {}
 async def discover_services():
     """Discover ModelService instances from Kubernetes"""
     try:
@@ -63,17 +66,33 @@ async def discover_services():
         
         discovered = {}
         pod_to_service = {}  # Map pod IP to service name
+        inferencepool_service = None  # Find InferencePool service (contains "ip-")
         
         # First, get all services to map pod IPs to service names
         services = v1.list_namespaced_service(namespace=NAMESPACE)
+        inferencepool_gateway = None  # Find InferencePool Gateway service (inference-gateway-istio)
         for svc in services.items:
+            # Check if this is an InferencePool Gateway service (the one we should use)
+            if "inference-gateway-istio" in svc.metadata.name:
+                inferencepool_gateway = svc.metadata.name
+                logger.info(f"Found InferencePool Gateway service: {inferencepool_gateway}")
+            
+            # Also check for InferencePool IP service (headless service with "ip-" in name)
+            # clusterIP can be None or "None" string, check both
+            cluster_ip = getattr(svc.spec, 'cluster_ip', None) or getattr(svc.spec, 'clusterIP', None)
+            if "ip-" in svc.metadata.name and (cluster_ip is None or cluster_ip == "None"):
+                # Store for reference, but prefer gateway service
+                if not inferencepool_gateway:
+                    inferencepool_service = svc.metadata.name
+                    logger.info(f"Found InferencePool IP service: {inferencepool_service}")
+            
             endpoints = v1.read_namespaced_endpoints(svc.metadata.name, NAMESPACE)
             for subset in endpoints.subsets or []:
                 for address in subset.addresses or []:
                     if address.target_ref and address.target_ref.kind == "Pod":
                         pod_to_service[address.ip] = svc.metadata.name
         
-        async def query_single_pod(pod, pod_ip, pod_to_service):
+        async def query_single_pod(pod, pod_ip, pod_to_service, inferencepool_gateway):
             """Query a single pod to get its model name"""
             service_name = pod_to_service.get(pod_ip, "")
             model_name = None
@@ -115,15 +134,27 @@ async def discover_services():
             # Return discovered mapping
             result = {}
             if model_name:
-                if service_name:
-                    key = (model_name, owned_by)
+                # Store pod IP in cache for fallback, but prefer InferencePool service
+                POD_IP_CACHE[model_name] = pod_ip
+                
+                key = (model_name, owned_by)
+                # Prefer InferencePool service if available (shared by all models in the pool)
+                # InferencePool provides intelligent routing, load balancing, and prefix-cache awareness
+                if inferencepool_service:
+                    # Use InferencePool service for all models (it routes based on model field)
+                    result[key] = inferencepool_service
+                    logger.info(f"Discovered: {model_name} (owned_by: {owned_by}) -> InferencePool service '{inferencepool_service}' (pod: {pod.metadata.name})")
+                elif service_name and "ip-" in service_name:
+                    # This is an InferencePool service (e.g., gaie-llama-32-1b-ip-a188d28a)
                     result[key] = service_name
-                    logger.info(f"Discovered: {model_name} (owned_by: {owned_by}) -> {service_name} (pod: {pod.metadata.name})")
+                    logger.info(f"Discovered: {model_name} (owned_by: {owned_by}) -> InferencePool service '{service_name}' (pod: {pod.metadata.name})")
+                elif service_name:
+                    result[key] = service_name
+                    logger.info(f"Discovered: {model_name} (owned_by: {owned_by}) -> service '{service_name}' (pod: {pod.metadata.name})")
                 else:
-                    # Fallback: use pod IP directly
-                    key = (model_name, owned_by)
+                    # Fallback: use pod IP directly if no service found
                     result[key] = pod_ip
-                    logger.info(f"Discovered: {model_name} (owned_by: {owned_by}) -> pod IP {pod_ip} (no service found)")
+                    logger.info(f"Discovered: {model_name} (owned_by: {owned_by}) -> pod IP {pod_ip} (no service found, pod: {pod.metadata.name})")
             return result
         
         # Query all pods in parallel
@@ -132,7 +163,7 @@ async def discover_services():
             pod_ip = pod.status.pod_ip
             if not pod_ip:
                 continue
-            tasks.append(query_single_pod(pod, pod_ip, pod_to_service))
+            tasks.append(query_single_pod(pod, pod_ip, pod_to_service, inferencepool_gateway))
         
         # Run all queries in parallel
         if tasks:
@@ -214,17 +245,56 @@ def get_service_for_model_and_owned_by(model: str, owned_by: Optional[str] = Non
     
     # Return None if not found
     return None
+# Cache pod IPs by model name for direct access
+POD_IP_CACHE: Dict[str, str] = {}
+
 async def forward_request(
     service_name: str,
     path: str,
     method: str,
     headers: Dict[str, str],
     body: bytes = None,
-    params: Dict[str, Any] = None
+    params: Dict[str, Any] = None,
+    model: str = None
 ) -> httpx.Response:
-    """Forward request to corresponding Service"""
-    # Build target URL
-    target_url = f"http://{service_name}.{NAMESPACE}.svc.cluster.local:{SERVICE_PORT}{path}"
+    """Forward request to InferencePool service or ModelService
+    
+    Priority:
+    1. InferencePool service (if service_name contains 'ip-') - provides intelligent routing
+    2. Regular Kubernetes service (via DNS)
+    3. Pod IP (fallback only)
+    """
+    target_url = None
+    
+    # Check if service_name is a pod IP (contains dots and numbers, no service name pattern)
+    is_pod_ip = (service_name.replace(".", "").replace(":", "").isdigit() or ":" in service_name) and not any(c.isalpha() for c in service_name)
+    
+    if is_pod_ip:
+        # It's a pod IP, use it directly (fallback case)
+        target_url = f"http://{service_name}:{SERVICE_PORT}{path}"
+        logger.info(f"Using pod IP directly (fallback): {service_name}")
+    elif "inference-gateway-istio" in service_name:
+        # This is an InferencePool Gateway service (e.g., infra-llama-32-1b-inference-gateway-istio)
+        # InferencePool Gateway provides intelligent routing, load balancing, and prefix-cache awareness
+        # Gateway service uses port 80, not 8000
+        target_url = f"http://{service_name}.{NAMESPACE}.svc.cluster.local:80{path}"
+        logger.info(f"Using InferencePool Gateway service: {service_name} (provides intelligent routing)")
+    elif "ip-" in service_name:
+        # This is an InferencePool IP service (headless service)
+        # It's used internally by InferencePool, not for direct access
+        # Fallback to pod IP if we somehow got here
+        if model and model in POD_IP_CACHE:
+            pod_ip = POD_IP_CACHE[model]
+            target_url = f"http://{pod_ip}:{SERVICE_PORT}{path}"
+            logger.info(f"Using pod IP (fallback from InferencePool IP service): {pod_ip}")
+        else:
+            # Use the IP service directly (headless service, DNS resolves to pod IPs)
+            target_url = f"http://{service_name}.{NAMESPACE}.svc.cluster.local:{SERVICE_PORT}{path}"
+            logger.info(f"Using InferencePool IP service (headless): {service_name}")
+    else:
+        # Regular Kubernetes service, use service DNS
+        target_url = f"http://{service_name}.{NAMESPACE}.svc.cluster.local:{SERVICE_PORT}{path}"
+        logger.info(f"Using Kubernetes service: {service_name}")
     
     # Remove headers that shouldn't be forwarded
     forward_headers = {k: v for k, v in headers.items() 
@@ -256,16 +326,20 @@ async def health():
 async def rediscover_services():
     """Manually trigger service discovery"""
     discovered = await discover_services()
-    return {"message": "Service discovery completed", "discovered": len(discovered), "services": discovered}
+    # Convert tuple keys to strings for JSON serialization
+    services_dict = {f"{model}::{owned_by or 'default'}": service for (model, owned_by), service in discovered.items()}
+    return {"message": "Service discovery completed", "discovered": len(discovered), "services": services_dict}
 @app.get("/admin/api/routing", response_model=List[RoutingMappingResponse])
 async def get_routing_config():
     """Get all routing mappings"""
     mappings = []
     for (model, owned_by), service_name in ROUTING_CONFIG.items():
+        # Show pod IP if available in cache, otherwise show service_name
+        display_name = POD_IP_CACHE.get(model, service_name)
         mappings.append(RoutingMappingResponse(
             model=model,
             owned_by=owned_by,
-            service_name=service_name
+            service_name=display_name
         ))
     return mappings
 @app.post("/admin/api/routing", response_model=RoutingMappingResponse)
@@ -442,71 +516,75 @@ async def list_models():
     logger.info(f"Returning {len(models)} models total")
     return {"object": "list", "data": models}
 
-    @app.api_route("/v1/{path:path}", methods=["GET", "POST", "DELETE"])
-    async def proxy_v1(request: Request, path: str):
-        """Proxy all /v1/* requests (except /v1/models which is handled above)"""
-        # Skip /v1/models as it's handled by list_models() above
-        if path == "models" and request.method == "GET":
-            # This should not happen as list_models() should handle it, but just in case
-            return await list_models()
-        
-        # Read request body
-        body = await request.body()
+@app.api_route("/v1/{path:path}", methods=["GET", "POST", "DELETE"])
+async def proxy_v1(request: Request, path: str):
+    """Proxy all /v1/* requests (except /v1/models which is handled above)"""
+    # Skip /v1/models as it's handled by list_models() above
+    if path == "models" and request.method == "GET":
+        # This should not happen as list_models() should handle it, but just in case
+        return await list_models()
     
-        # Parse request body to get model and owned_by fields
-        model = None
-        owned_by = None
-    
-        if body:
-            try:
-                body_json = json.loads(body)
-                model = body_json.get("model")
-                # Check for owned_by, engine, or inference_server field
-                owned_by = (body_json.get("owned_by") or 
-                           body_json.get("engine") or 
-                           body_json.get("inference_server"))
-            except json.JSONDecodeError:
-                pass
-    
-        # If no model from body, try query parameters
-        if not model:
-            model = request.query_params.get("model")
-    
-        # If no owned_by from body, try header or query parameters
-        if not owned_by:
-            owned_by = (request.headers.get("x-owned-by") or
-                       request.headers.get("X-Owned-By") or
-                       request.query_params.get("owned_by") or
-                       request.query_params.get("engine") or
-                       request.query_params.get("inference_server"))
-    
-        # If still no model, return error
-        if not model:
-            raise HTTPException(
-                status_code=400,
-                detail="Missing 'model' field in request body, query parameters, or headers"
-            )
-    
+    # Read request body
+    body = await request.body()
+
+    # Parse request body to get model and owned_by fields
+    model = None
+    owned_by = None
+
+    if body:
+        try:
+            body_json = json.loads(body)
+            model = body_json.get("model")
+            # Check for owned_by, engine, or inference_server field
+            owned_by = (body_json.get("owned_by") or 
+                       body_json.get("engine") or 
+                       body_json.get("inference_server"))
+        except json.JSONDecodeError:
+            pass
+
+    # If no model from body, try query parameters
+    if not model:
+        model = request.query_params.get("model")
+
+    # If no owned_by from body, try header or query parameters
+    if not owned_by:
+        owned_by = (request.headers.get("x-owned-by") or
+                   request.headers.get("X-Owned-By") or
+                   request.query_params.get("owned_by") or
+                   request.query_params.get("engine") or
+                   request.query_params.get("inference_server"))
+
+    # If still no model, return error
+    if not model:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing 'model' field in request body, query parameters, or headers"
+        )
+
     # Get corresponding Service based on model and owned_by
     service_name = get_service_for_model_and_owned_by(model, owned_by)
     if not service_name:
         # Try to discover services again (async call in sync context - will be handled by admin API)
         # For now, just log and continue
         logger.warning(f"Service not found for model '{model}' with owned_by '{owned_by}'. Try calling POST /admin/discover first.")
+        # Trigger service discovery if routing config is empty
+        if not ROUTING_CONFIG:
+            logger.info("Routing config is empty, triggering service discovery...")
+            await discover_services()
         service_name = get_service_for_model_and_owned_by(model, owned_by)
-    
+
     if not service_name:
-            available_models = [f"{m} (owned_by: {o})" if o else m 
-                               for (m, o) in ROUTING_CONFIG.keys() if m]
-            raise HTTPException(
-                status_code=404,
-                detail=f"Model '{model}' with owned_by '{owned_by}' not found. "
-                       f"Available: {available_models}. "
-                       f"Try calling POST /admin/discover to refresh service discovery."
-            )
-    
+        available_models = [f"{m} (owned_by: {o})" if o else m 
+                           for (m, o) in ROUTING_CONFIG.keys() if m]
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{model}' with owned_by '{owned_by}' not found. "
+                   f"Available: {available_models}. "
+                   f"Try calling POST /admin/discover to refresh service discovery."
+        )
+
     logger.info(f"Routing request for model '{model}' with owned_by '{owned_by}' to service '{service_name}'")
-    
+
     # Forward request
     try:
         response = await forward_request(
@@ -515,7 +593,8 @@ async def list_models():
             method=request.method,
             headers=dict(request.headers),
             body=body,
-            params=dict(request.query_params)
+            params=dict(request.query_params),
+            model=model
         )
         
         # Handle streaming response

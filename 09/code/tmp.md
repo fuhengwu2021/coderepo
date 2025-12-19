@@ -169,18 +169,29 @@ llm-d provides a production-grade solution using:
     │  vLLM Pods (1x)      │    │  vLLM Pods (1x)     │
     └──────────────────────┘    └─────────────────────┘
 
-Alternative: Custom API Gateway (Advanced Unified Interface)
+Alternative: Custom API Gateway (Advanced Unified Interface with owned_by support)
 ┌─────────────────────────────────────────────────────────────┐
 │              Custom API Gateway (Optional)                  │
 │  - Unified Interface: /v1/chat/completions                  │
 │  - Routes by 'model' + 'owned_by' fields                    │
 │  - Supports header-based routing (x-owned-by)                │
 │  - Admin API for dynamic routing management                  │
+└───────────────┬─────────────────────────────────────────────┘
+                │
+                │ Routes to InferencePool Gateway
+                │ (preserves intelligent scheduling)
+                ▼
+┌─────────────────────────────────────────────────────────────┐
+│         InferencePool Gateway (Kubernetes Gateway API)     │
+│  - Intelligent routing, load balancing                     │
+│  - Prefix-cache awareness                                   │
+└───────────────┬─────────────────────────────────────────────┘
+                │
+                ▼
+┌─────────────────────────────────────────────────────────────┐
+│              InferencePool (Routing Layer)                  │
+│  - Routes requests to appropriate ModelService              │
 └───────────────┬───────────────────────────┬─────────────────┘
-                │                           │
-                │ Direct routing to        │
-                │ ModelServices            │
-                │ (bypasses InferencePool) │
                 │                           │
     ┌───────────▼──────────┐    ┌───────────▼─────────┐
     │  ModelService 1      │    │  ModelService 2     │
@@ -511,9 +522,12 @@ While `prefill-header-handler` is designed for P/D disaggregation (adding `X-Pre
 
 3. **✅ Custom API Gateway (Implemented)**: A custom API Gateway has been created at `09/code/llmd/llmd-api-gateway.yaml` that:
    - Reads `owned_by` from request body, HTTP header (`x-owned-by`), or query parameters
-   - Automatically discovers ModelService instances from Kubernetes
+   - Automatically discovers ModelService instances and InferencePool Gateway services from Kubernetes
+   - **Routes through InferencePool Gateway services** (e.g., `infra-llama-32-1b-inference-gateway-istio`) to leverage llm-d's intelligent routing, load balancing, and prefix-cache awareness
+   - Falls back to direct pod IP routing only if InferencePool Gateway service is not available
    - Routes to different ModelServices based on `model` and `owned_by`
    - Works without modifying llm-d source code
+   - **Important**: The Custom API Gateway uses InferencePool Gateway services (not the IP headless services), ensuring you get all the benefits of llm-d's intelligent scheduling, load balancing, and prefix-cache awareness
    - See **Step 5: Deploy Custom API Gateway** below for deployment instructions
 
 **Example**: See `llm-d/guides/predicted-latency-based-scheduling/README.md` for how custom headers (`x-prediction-based-scheduling`, `x-slo-ttft-ms`) are used with `slo-aware-profile-handler`.
@@ -623,24 +637,24 @@ kubectl get pod,svc -l app=llmd-gateway -n ${NAMESPACE}
 The Gateway automatically discovers services on startup, but you can manually trigger discovery:
 
 ```bash
-# Port-forward to Gateway
-kubectl port-forward -n ${NAMESPACE} svc/llmd-api-gateway 8001:8000
+# Port-forward to Gateway (using standard port 8000)
+kubectl port-forward -n ${NAMESPACE} svc/llmd-api-gateway 8000:8000
 
 # In another terminal, trigger service discovery
-curl -X POST http://localhost:8001/admin/discover
+curl -X POST http://localhost:8000/admin/discover
 
 # Check routing configuration
-curl http://localhost:8001/admin/api/routing
+curl http://localhost:8000/admin/api/routing
 ```
 
 **Test the Gateway:**
 
 ```bash
 # List available models
-curl http://localhost:8001/v1/models
+curl http://localhost:8000/v1/models
 
 # Test with owned_by in request body
-curl -X POST http://localhost:8001/v1/chat/completions \
+curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
@@ -652,7 +666,7 @@ curl -X POST http://localhost:8001/v1/chat/completions \
   }'
 
 # Test with owned_by in HTTP header
-curl -X POST http://localhost:8001/v1/chat/completions \
+curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "x-owned-by: vllm" \
   -d '{
@@ -666,13 +680,20 @@ curl -X POST http://localhost:8001/v1/chat/completions \
 
 **Gateway Features:**
 
-1. **Automatic Service Discovery**: Discovers ModelService instances from Kubernetes using label selector `llm-d.ai/role=decode`
-2. **Multiple Input Sources**: Reads `owned_by` from:
+1. **Automatic Service Discovery**: 
+   - Discovers ModelService instances from Kubernetes using label selector `llm-d.ai/role=decode`
+   - Automatically finds InferencePool Gateway services (e.g., `infra-*-inference-gateway-istio`)
+   - Prefers InferencePool Gateway services over direct pod IP routing
+2. **InferencePool Integration**: 
+   - Routes requests through InferencePool Gateway services to leverage intelligent scheduling
+   - Preserves all llm-d features: load balancing, prefix-cache awareness, health checking
+   - Falls back to direct pod IP routing only if InferencePool Gateway is unavailable
+3. **Multiple Input Sources**: Reads `owned_by` from:
    - Request body JSON field: `{"model": "...", "owned_by": "vllm"}`
    - HTTP header: `x-owned-by: vllm` or `X-Owned-By: vllm`
    - Query parameter: `?owned_by=vllm`
-3. **Backward Compatibility**: Also supports `engine` and `inference_server` fields
-4. **Admin API**: 
+4. **Backward Compatibility**: Also supports `engine` and `inference_server` fields
+5. **Admin API**: 
    - `GET /admin/api/routing` - List all routing mappings
    - `POST /admin/api/routing` - Add a routing mapping
    - `DELETE /admin/api/routing?model=...&owned_by=...` - Delete a routing mapping
@@ -680,9 +701,22 @@ curl -X POST http://localhost:8001/v1/chat/completions \
 
 **Integration with InferencePool:**
 
-You can use the custom API Gateway **instead of** or **in front of** the InferencePool:
-- **Option A**: Use Gateway only (bypass InferencePool) - Gateway routes directly to ModelServices
-- **Option B**: Use Gateway → InferencePool → ModelServices - Gateway routes to InferencePool, which then routes to ModelServices (if InferencePool supports owned_by routing in the future)
+The custom API Gateway is designed to **work with InferencePool Gateway**, not bypass it:
+- **✅ Recommended**: Custom API Gateway → InferencePool Gateway → InferencePool → ModelServices
+  - Custom API Gateway routes requests to InferencePool Gateway services (e.g., `infra-llama-32-1b-inference-gateway-istio`)
+  - InferencePool Gateway provides intelligent routing, load balancing, prefix-cache awareness, and health checking
+  - This ensures you get all the benefits of llm-d's production-ready features
+- **Fallback**: Custom API Gateway → Direct Pod IP (only if InferencePool Gateway service is not available)
+  - Used as a last resort when InferencePool Gateway service discovery fails
+  - Not recommended for production use
+
+**Why use InferencePool Gateway?**
+- ✅ Intelligent request scheduling based on queue depth and KV cache utilization
+- ✅ Prefix-cache aware routing for better performance
+- ✅ Automatic health checking and failover
+- ✅ Load balancing across multiple ModelService replicas
+- ✅ Production-ready and battle-tested
+- ✅ Kubernetes Gateway API integration for advanced traffic management
 
 ### Step 6: Using the Unified Interface
 
@@ -771,18 +805,18 @@ The Custom API Gateway provides a unified interface that routes based on both `m
 ```bash
 export NAMESPACE=llm-d-multi-model
 
-# Port-forward to Custom API Gateway
-kubectl port-forward -n ${NAMESPACE} svc/llmd-api-gateway 8003:8000
+# Port-forward to Custom API Gateway (using standard port 8000)
+kubectl port-forward -n ${NAMESPACE} svc/llmd-api-gateway 8000:8000
 
 # In another terminal, use the unified interface
 # 1. List all available models
-curl http://localhost:8003/v1/models
+curl http://localhost:8000/v1/models
 ```
 
 **2. Chat Completion with owned_by in request body:**
 
 ```bash
-curl http://localhost:8003/v1/chat/completions \
+curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
@@ -797,7 +831,7 @@ curl http://localhost:8003/v1/chat/completions \
 **3. Chat Completion with owned_by in HTTP header:**
 
 ```bash
-curl http://localhost:8003/v1/chat/completions \
+curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "x-owned-by: vllm" \
   -d '{
@@ -840,13 +874,14 @@ curl http://localhost:8003/v1/chat/completions \
 export NAMESPACE=llm-d-multi-model
 
 # Option 1: Port-forward to Custom API Gateway (recommended if deployed)
-kubectl port-forward -n ${NAMESPACE} svc/llmd-api-gateway 8001:8000
+# Use standard port 8000 for consistency
+kubectl port-forward -n ${NAMESPACE} svc/llmd-api-gateway 8000:8000
 
 # In another terminal, test the API
-curl -X GET http://localhost:8001/v1/models
+curl -X GET http://localhost:8000/v1/models
 
 # Test with owned_by in request body
-curl -X POST http://localhost:8001/v1/chat/completions \
+curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "meta-llama/Llama-3.2-1B-Instruct",
@@ -858,11 +893,12 @@ curl -X POST http://localhost:8001/v1/chat/completions \
   }'
 
 # Option 2: Port-forward directly to ModelService pod (for direct testing)
+# Note: Use a different port (e.g., 8001) to avoid conflicts
 POD_NAME=$(kubectl get pods -n ${NAMESPACE} -l llm-d.ai/role=decode | grep llama-32-1b | awk '{print $1}')
-kubectl port-forward -n ${NAMESPACE} pod/${POD_NAME} 8002:8000
+kubectl port-forward -n ${NAMESPACE} pod/${POD_NAME} 8001:8000
 
 # In another terminal, test the API
-curl -X GET http://localhost:8002/v1/models
+curl -X GET http://localhost:8001/v1/models
 
 # Option 3: Port-forward to InferencePool Gateway (through InferencePool routing)
 kubectl port-forward -n ${NAMESPACE} svc/infra-llama-32-1b-inference-gateway-istio 8080:80
@@ -940,16 +976,21 @@ curl http://${CUSTOM_GATEWAY_IP}:8000/v1/chat/completions \
 **Current Status:**
 - ✅ Cluster `llmd-cluster` is running with 3 nodes (1 server + 2 agents)
 - ✅ All pods are deployed in `llm-d-multi-model` namespace
-- ✅ **Correct Architecture**: 1 Gateway + 1 InferencePool + 2 ModelService pods
+- ✅ **Correct Architecture**: 1 InferencePool Gateway + 1 InferencePool + 2 ModelService pods + 1 Custom API Gateway
 - ✅ First model (llama-32-1b) is running (2/2 Ready) and **accepting curl requests** ✓
 - ✅ Second model (qwen2-5-0-5b) is running (2/2 Ready) and **accepting curl requests** ✓
-- ✅ Gateway and HTTPRoute are configured
+- ✅ InferencePool Gateway and HTTPRoute are configured
 - ✅ InferencePool automatically discovers ModelService instances via label selector `llm-d.ai/inferenceServing=true`
+- ✅ Custom API Gateway automatically discovers and routes through InferencePool Gateway services
 - ✅ Models accessible: `/raid/models` (host) → `/models` (k3d container) → `/models` (pod via hostPath)
-- ✅ **API Testing**: Both models successfully accept curl requests via port-forward
+- ✅ **API Testing**: Both models successfully accept curl requests via port-forward through Custom API Gateway
+- ✅ **InferencePool Integration**: All requests benefit from InferencePool's intelligent scheduling, load balancing, and prefix-cache awareness
 - ✅ **Unified Interface**: Both InferencePool Gateway and Custom API Gateway provide unified interfaces
-  - InferencePool Gateway: Basic unified interface (routes by `model` field only)
-  - Custom API Gateway: Advanced unified interface (routes by `model` + `owned_by` fields)
+  - InferencePool Gateway: Basic unified interface (routes by `model` field only) - Access via port-forward to `infra-llama-32-1b-inference-gateway-istio` service on port 8080
+  - Custom API Gateway: Advanced unified interface (routes by `model` + `owned_by` fields) - Access via port-forward to `llmd-api-gateway` service on port 8000
+  - **Important**: Custom API Gateway routes through InferencePool Gateway, ensuring all requests benefit from intelligent scheduling
+- ✅ **Custom API Gateway**: Successfully deployed and tested, returns both models with complete metadata (`created` timestamp and `max_model_len`)
+- ✅ **InferencePool Integration**: Custom API Gateway correctly uses InferencePool Gateway services, preserving all llm-d intelligent scheduling features
 
 **Model Storage Configuration:**
 - **Host path**: `/raid/models` (where models are stored on host machine)
@@ -959,9 +1000,11 @@ curl http://${CUSTOM_GATEWAY_IP}:8000/v1/chat/completions \
 - **Volume mount**: Set `readOnly: false` to allow vLLM to write cache files to `/models/hub`
 
 **Testing the API:**
-- ✅ First model (llama-32-1b) successfully accepts curl requests
-- ✅ Tested endpoints: `/v1/models` and `/v1/completions`
-- ✅ Direct pod port-forward works: `kubectl port-forward pod/<pod-name> 8002:8000`
+- ✅ Both models (llama-32-1b and qwen2-5-0-5b) successfully accept curl requests
+- ✅ Tested endpoints: `/v1/models` and `/v1/chat/completions`
+- ✅ Custom API Gateway accessible on `http://localhost:8000` (via port-forward)
+- ✅ Custom API Gateway `/v1/models` returns both models with complete metadata (`created` and `max_model_len`)
+- ✅ Direct pod port-forward works: `kubectl port-forward pod/<pod-name> 8001:8000` (use 8001 to avoid conflict with Gateway)
 
 **Reference:** 
 - See `/home/fuhwu/workspace/coderepo/09/code/k3d/ref.md` for manual deployment examples using kubectl (without llm-d)
@@ -975,19 +1018,42 @@ kubectl get pods -n ${NAMESPACE}  # NOT just "kubectl get pods" (which queries d
 ```
 
 **To test the API:**
+
+**Option 1: Via Custom API Gateway (Recommended - Unified Interface):**
+```bash
+export NAMESPACE=llm-d-multi-model
+
+# Port-forward to Custom API Gateway (standard port 8000)
+kubectl port-forward -n ${NAMESPACE} svc/llmd-api-gateway 8000:8000
+
+# In another terminal, test unified interface
+# List all models (returns both models with complete metadata)
+curl http://localhost:8000/v1/models | jq
+
+# Test chat completion
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.2-1B-Instruct",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "max_tokens": 50
+  }'
+```
+
+**Option 2: Direct Pod Port-Forward (For Direct Testing):**
 ```bash
 export NAMESPACE=llm-d-multi-model
 # Get pod name
 POD_NAME=$(kubectl get pods -n ${NAMESPACE} -l llm-d.ai/role=decode | grep llama-32-1b | awk '{print $1}')
 
-# Port-forward to pod
-kubectl port-forward -n ${NAMESPACE} pod/${POD_NAME} 8002:8000
+# Port-forward to pod (use 8001 to avoid conflict with Gateway on 8000)
+kubectl port-forward -n ${NAMESPACE} pod/${POD_NAME} 8001:8000
 
 # In another terminal, test
-curl -X GET http://localhost:8002/v1/models
-curl -X POST http://localhost:8002/v1/completions \
+curl -X GET http://localhost:8001/v1/models
+curl -X POST http://localhost:8001/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "meta-llama/Llama-3.2-1B-Instruct", "prompt": "Hello", "max_tokens": 10}'
+  -d '{"model": "meta-llama/Llama-3.2-1B-Instruct", "messages": [{"role": "user", "content": "Hello!"}], "max_tokens": 10}'
 ```
 
 **Key Fixes Applied:**
@@ -998,12 +1064,22 @@ curl -X POST http://localhost:8002/v1/completions \
 5. ✅ Configured `hostPath` volume for local model access (`/raid/models` on host → `/models` in pods)
 6. ✅ Set `readOnly: false` on volume mount to allow vLLM cache writes
 7. ✅ Cleaned up duplicate Gateway/InferencePool deployments (keep only one shared instance)
+8. ✅ Custom API Gateway deployed and configured for `owned_by` routing
+9. ✅ Custom API Gateway returns both models with complete metadata (`created` timestamp and `max_model_len`)
+10. ✅ Port-forward configured to use standard port 8000 for Custom API Gateway
+11. ✅ Custom API Gateway now correctly routes through InferencePool Gateway services (e.g., `infra-llama-32-1b-inference-gateway-istio`) instead of bypassing them
+12. ✅ Fixed service discovery to automatically find and use InferencePool Gateway services
+13. ✅ Fixed Kubernetes API access issues (clusterIP attribute access)
+14. ✅ All requests now benefit from InferencePool's intelligent scheduling, load balancing, and prefix-cache awareness
 
 **Successfully Tested:**
-- ✅ First model (llama-32-1b) accepts curl requests
-- ✅ `/v1/models` endpoint returns model list
-- ✅ `/v1/completions` endpoint returns inference results
-- ✅ Direct pod port-forward works: `kubectl port-forward pod/<pod-name> 8002:8000`
+- ✅ Both models (llama-32-1b and qwen2-5-0-5b) accept curl requests
+- ✅ Custom API Gateway `/v1/models` endpoint returns both models with complete metadata
+- ✅ Custom API Gateway `/v1/chat/completions` endpoint routes correctly to both models through InferencePool Gateway
+- ✅ Custom API Gateway automatically discovers and uses InferencePool Gateway services
+- ✅ All requests benefit from InferencePool's intelligent scheduling and load balancing
+- ✅ Direct pod port-forward works: `kubectl port-forward pod/<pod-name> 8001:8000`
+- ✅ Custom API Gateway accessible on `http://localhost:8000` (standard port)
 
 ### Comparison: k3d vs llm-d
 
