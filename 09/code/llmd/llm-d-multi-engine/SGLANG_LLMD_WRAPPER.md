@@ -2,7 +2,7 @@
 
 ## 发现
 
-在 `/home/fuhwu/workspace/llm-d/guides/inference-scheduling/ms-inference-scheduling/values.yaml` 中找到了使用 `sglangServe` 的示例：
+在 `${LLMD_HOME}/guides/inference-scheduling/ms-inference-scheduling/values.yaml` 中找到了使用 `sglangServe` 的示例：
 
 ```yaml
 containers:

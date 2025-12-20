@@ -11,7 +11,7 @@ NAMESPACE="${NAMESPACE:-llm-d-multi-engine}"
 # Check LLMD_HOME
 if [ -z "$LLMD_HOME" ]; then
     echo "❌ Error: LLMD_HOME environment variable not set."
-    echo "   Please set: export LLMD_HOME=/home/fuhwu/workspace/llm-d"
+    echo "   Please set: export LLMD_HOME=/path/to/llm-d"
     exit 1
 fi
 

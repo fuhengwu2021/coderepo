@@ -27,7 +27,7 @@ ModelService Helm chart (`llm-d-modelservice/llm-d-modelservice`) 的 `modelComm
 **当前部署的 chart 版本 (v0.3.8) 不支持 `sglangServe`**，所以 SGLang 必须使用 `custom` 模式，并直接使用 SGLang 官方镜像。
 
 ### 重要发现
-虽然在 `/home/fuhwu/workspace/llm-d/guides/inference-scheduling/ms-inference-scheduling/values.yaml` 中找到了 `sglangServe` 的示例配置：
+虽然在 `${LLMD_HOME}/guides/inference-scheduling/ms-inference-scheduling/values.yaml` 中找到了 `sglangServe` 的示例配置：
 ```yaml
 containers:
 - name: "sglang"

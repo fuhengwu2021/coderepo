@@ -30,11 +30,11 @@ When following this document, replace paths like this:
 
 | Document references | Actual path on your system |
 |-------------------|---------------------------|
-| `resources/llm-d/guides/prereq/client-setup` | `/home/fuhwu/workspace/llm-d/guides/prereq/client-setup` |
-| `resources/llm-d/guides/prereq/gateway-provider` | `/home/fuhwu/workspace/llm-d/guides/prereq/gateway-provider` |
-| `resources/llm-d/guides/inference-scheduling` | `/home/fuhwu/workspace/llm-d/guides/inference-scheduling` |
+| `resources/llm-d/guides/prereq/client-setup` | `${LLMD_HOME}/guides/prereq/client-setup` |
+| `resources/llm-d/guides/prereq/gateway-provider` | `${LLMD_HOME}/guides/prereq/gateway-provider` |
+| `resources/llm-d/guides/inference-scheduling` | `${LLMD_HOME}/guides/inference-scheduling` |
 
-**Good news!** The llm-d repository is already available at `/home/fuhwu/workspace/llm-d`, so all the guides and scripts referenced in this document are available.
+**Good news!** The llm-d repository should be available at `${LLMD_HOME}` (set via `export LLMD_HOME=/path/to/llm-d`), so all the guides and scripts referenced in this document are available.
 
 ### Cluster Separation Summary
 
@@ -91,9 +91,9 @@ k3d cluster delete llmd-cluster
 
 #### Issue: Can't find llm-d guides
 
-The guides are already available at `/home/fuhwu/workspace/llm-d`. If you need to update the repository:
+The guides should be available at `${LLMD_HOME}`. If you need to update the repository:
 ```bash
-cd /home/fuhwu/workspace/llm-d
+cd ${LLMD_HOME}
 git pull
 ```
 
@@ -150,7 +150,7 @@ llm-d provides a production-grade solution using:
 │  - Load balancing with prefix-cache awareness               │
 │  - Intelligent request scheduling                           │
 │  - Traffic routing to InferencePool                         │
-│  - Unified Interface: /v1/chat/completions                 │
+│  - Unified Interface: /v1/chat/completions                  │
 └───────────────┬─────────────────────────────────────────────┘
                 │
                 ▼
@@ -203,7 +203,7 @@ Alternative: Custom API Gateway (Advanced Unified Interface with owned_by suppor
 
 **Set environment variables:**
 ```bash
-export LLMD_HOME=/home/fuhwu/workspace/llm-d
+export LLMD_HOME=/path/to/llm-d  # Set to your llm-d repository path
 export LLMD_CONFIG_DIR=<path-to-your-config-directory>  # Directory containing values YAML files
 ```
 
@@ -215,7 +215,7 @@ export LLMD_CONFIG_DIR=<path-to-your-config-directory>  # Directory containing v
    This installs: `helm`, `helmfile`, `kubectl`, `yq`, `git`
 
 ```
- 🌈 $   export LLMD_HOME=/home/fuhwu/workspace/llm-d
+ 🌈 $   export LLMD_HOME=/path/to/llm-d  # Set to your llm-d repository path
    cd ${LLMD_HOME}/guides/prereq/client-setup
    ./install-deps.sh
 Installing yq...
