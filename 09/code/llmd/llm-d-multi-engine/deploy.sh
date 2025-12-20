@@ -230,15 +230,16 @@ echo ""
 
 if [ "${USE_LLMD_CRD:-false}" = "true" ] && kubectl get crd llminferenceservices.llm-d.ai &>/dev/null; then
     echo "📦 Deploying vLLM using llm-d LLMInferenceService..."
-    kubectl apply -f "$SCRIPT_DIR/vllm-llminference.yaml"
-    
-    echo "⏳ Waiting for vLLM service to be ready..."
-    kubectl wait --for=condition=ready pod \
-      -l llm-d.ai/inference-service=vllm-qwen2-5-0-5b \
-      --timeout=600s || echo "⚠️  Pod may still be starting (model loading can take time)"
+    echo "⚠️  NOTE: vllm-llminference.yaml has been removed. Use deploy-modelservice.sh instead."
+    # kubectl apply -f "$SCRIPT_DIR/vllm-llminference.yaml"  # File removed - use deploy-modelservice.sh
+    echo "   Please use: ./deploy-modelservice.sh"
+    exit 1
 else
     echo "📦 Deploying vLLM using direct Pod deployment..."
-    kubectl apply -f "$SCRIPT_DIR/vllm-pod.yaml"
+    echo "⚠️  NOTE: vllm-pod.yaml has been removed. Use deploy-modelservice.sh instead."
+    # kubectl apply -f "$SCRIPT_DIR/vllm-pod.yaml"  # File removed - use deploy-modelservice.sh
+    echo "   Please use: ./deploy-modelservice.sh"
+    exit 1
     
     echo "⏳ Waiting for vLLM pod to be ready..."
     kubectl wait --for=condition=ready pod/vllm-qwen2-5-0-5b --timeout=600s || echo "⚠️  Pod may still be starting (model loading can take time)"

@@ -462,7 +462,8 @@ k3d cluster delete llmd-multiengine
 ## Files Overview
 
 - `README.md` - This file (design doc and commands)
-- `qwen2.5-0.5b-values.yaml` - Helm values for Qwen2.5-0.5B-Instruct (llm-d ModelService)
+- `qwen2.5-0.5b-vllm-values.yaml` - Helm values for Qwen2.5-0.5B-Instruct with vLLM (llm-d ModelService)
+- `qwen2.5-0.5b-sglang-values.yaml` - Helm values for Qwen2.5-0.5B-Instruct with SGLang (llm-d ModelService)
 - `vllm-llminference.yaml` - vLLM LLMInferenceService CRD (llm-d framework)
 - `sglang-llminference.yaml` - SGLang LLMInferenceService CRD (llm-d framework)
 - `vllm-pod.yaml` - Direct vLLM Pod deployment (fallback)

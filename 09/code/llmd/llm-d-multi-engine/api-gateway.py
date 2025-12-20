@@ -179,24 +179,23 @@ async def discover_services():
                     elif owned_by == "sglang":
                         gateway_service_name = f"infra-sglang-qwen2-5-0-5b-inference-gateway-istio"
                 
-                # Check if this gateway service exists
+                # Check if this gateway service exists - no fallback, fast fail
                 if gateway_service_name:
                     try:
                         svc = v1.read_namespaced_service(gateway_service_name, NAMESPACE)
                         target_service = gateway_service_name
                         logger.info(f"Using InferencePool Gateway service: {target_service} for {model_name} ({owned_by})")
                     except Exception as e:
-                        logger.warning(f"Gateway service {gateway_service_name} not found: {e}")
-                        gateway_service_name = None
+                        logger.error(f"Gateway service {gateway_service_name} not found: {e}")
+                        # No fallback - fast fail
+                        target_service = None
+                else:
+                    target_service = None
                 
-                # Fallback to EPP service or pod IP
+                # If no gateway service found, don't use fallback - fail fast
                 if not target_service:
-                    if service_name and "epp" in service_name:
-                        target_service = service_name
-                    elif service_name:
-                        target_service = service_name
-                    else:
-                        target_service = pod_ip
+                    logger.warning(f"No gateway service found for {model_name} ({owned_by}), skipping discovery")
+                    return result  # Return empty result instead of continue (not in a loop)
                 
                 result[key] = target_service
                 logger.info(f"Discovered: {model_name} (owned_by: {owned_by}) -> '{target_service}' (pod: {pod.metadata.name})")
@@ -309,8 +308,14 @@ async def forward_request(
         logger.info(f"Using pod IP directly (fallback): {service_name}")
     else:
         # Regular Kubernetes service, use service DNS
-        target_url = f"http://{service_name}.{NAMESPACE}.svc.cluster.local:{SERVICE_PORT}{path}"
-        logger.info(f"Using Kubernetes service: {service_name}")
+        # Check if this is an InferencePool Gateway service (uses port 80)
+        if "inference-gateway-istio" in service_name:
+            gateway_port = 80
+            target_url = f"http://{service_name}.{NAMESPACE}.svc.cluster.local:{gateway_port}{path}"
+            logger.info(f"Using InferencePool Gateway service: {service_name} on port {gateway_port}")
+        else:
+            target_url = f"http://{service_name}.{NAMESPACE}.svc.cluster.local:{SERVICE_PORT}{path}"
+            logger.info(f"Using Kubernetes service: {service_name} on port {SERVICE_PORT}")
     
     # Remove headers that shouldn't be forwarded
     forward_headers = {k: v for k, v in headers.items() 
@@ -475,28 +480,55 @@ async def list_models():
             logger.warning(f"Failed to get models from {service_name}: {e}")
     
     # Add models from pod cache that weren't matched
+    # This ensures we include all models even if InferencePool Gateway services are unavailable
     for pod_ip, pod_model in pod_model_cache.items():
         pod_model_id = pod_model.get("id", "")
         if pod_model_id:
-            already_added = any(m.get("id") == pod_model_id for m in models)
-            if not already_added:
-                owned_by = "vllm"
+            # Determine owned_by from pod name or ROUTING_CONFIG
+            owned_by = None
+            
+            # Try to find the pod to get its name for owned_by detection
+            try:
+                pods = v1.list_namespaced_pod(
+                    namespace=NAMESPACE,
+                    label_selector="llm-d.ai/role=decode"
+                )
+                for pod in pods.items:
+                    if pod.status.pod_ip == pod_ip:
+                        pod_name = pod.metadata.name
+                        # Extract owned_by from pod name
+                        if "vllm" in pod_name.lower():
+                            owned_by = "vllm"
+                        elif "sglang" in pod_name.lower():
+                            owned_by = "sglang"
+                        break
+            except Exception as e:
+                logger.warning(f"Failed to get pod info for IP {pod_ip}: {e}")
+            
+            # Fallback to ROUTING_CONFIG
+            if not owned_by:
                 for (config_model, config_owned_by), config_svc in ROUTING_CONFIG.items():
                     if (config_model == pod_model_id or 
                         pod_model_id.lower() in config_model.lower() or 
                         config_model.lower() in pod_model_id.lower()):
                         owned_by = config_owned_by or "vllm"
                         break
-                
-                key = (pod_model_id, owned_by)
-                if key not in seen_keys:
-                    seen_keys.add(key)
-                    model_entry = pod_model.copy()
-                    model_entry["id"] = pod_model_id
-                    model_entry.pop("permission", None)
-                    model_entry.pop("engine", None)
-                    model_entry["owned_by"] = owned_by
-                    models.append(model_entry)
+            
+            # Final fallback
+            if not owned_by:
+                owned_by = "vllm"
+            
+            # Check if this specific (model_id, owned_by) combination is already added
+            key = (pod_model_id, owned_by)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                model_entry = pod_model.copy()
+                model_entry["id"] = pod_model_id
+                model_entry.pop("permission", None)
+                model_entry.pop("engine", None)
+                model_entry["owned_by"] = owned_by
+                models.append(model_entry)
+                logger.info(f"Added model from pod cache: {pod_model_id} (owned_by: {owned_by})")
     
     logger.info(f"Returning {len(models)} models total")
     return {"object": "list", "data": models}

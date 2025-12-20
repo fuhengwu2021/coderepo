@@ -21,7 +21,7 @@ echo "📝 Updating ConfigMap from api-gateway.py..."
 # Deploy Gateway
 echo ""
 echo "📦 Deploying API Gateway..."
-kubectl apply -f "${SCRIPT_DIR}/llmd-api-gateway.yaml"
+kubectl apply -f "${SCRIPT_DIR}/api-gateway.yaml"
 
 # Wait for Gateway to be ready
 echo ""

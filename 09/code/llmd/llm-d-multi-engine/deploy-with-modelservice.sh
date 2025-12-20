@@ -96,7 +96,7 @@ cd "${LLMD_HOME}/guides/inference-scheduling"
 
 # Prepare values file for vLLM
 mkdir -p ms-inference-scheduling-vllm
-cp "${SCRIPT_DIR}/qwen2.5-0.5b-values.yaml" ms-inference-scheduling-vllm/values.yaml
+cp "${SCRIPT_DIR}/qwen2.5-0.5b-vllm-values.yaml" ms-inference-scheduling-vllm/values.yaml
 
 # Update nodeSelector for vLLM (GPU 0)
 yq eval '.decode.extraConfig.nodeSelector."kubernetes.io/hostname" = "k3d-llmd-multiengine-agent-0"' -i ms-inference-scheduling-vllm/values.yaml
@@ -107,11 +107,11 @@ yq eval '.decode.containers[0].env += [{"name": "NVIDIA_VISIBLE_DEVICES", "value
 echo "📦 Deploying vLLM ModelService..."
 RELEASE_NAME_POSTFIX=vllm-qwen2-5-0-5b \
 helmfile apply -n "${NAMESPACE}" \
-  --set-file ms-inference-scheduling.values[0]="${SCRIPT_DIR}/qwen2.5-0.5b-values.yaml" || {
+  --set-file ms-inference-scheduling.values[0]="${SCRIPT_DIR}/qwen2.5-0.5b-vllm-values.yaml" || {
     echo "⚠️  Helmfile deployment failed. Trying alternative approach..."
     # Alternative: copy values to expected location
     mkdir -p ms-inference-scheduling
-    cp "${SCRIPT_DIR}/qwen2.5-0.5b-values.yaml" ms-inference-scheduling/values.yaml
+    cp "${SCRIPT_DIR}/qwen2.5-0.5b-vllm-values.yaml" ms-inference-scheduling/values.yaml
     RELEASE_NAME_POSTFIX=vllm-qwen2-5-0-5b helmfile apply -n "${NAMESPACE}"
 }
 
@@ -130,7 +130,7 @@ echo "Step 6: Preparing SGLang values file"
 echo "=========================================="
 # Create SGLang values file from vLLM template
 SGLANG_VALUES="${SCRIPT_DIR}/qwen2.5-0.5b-sglang-values.yaml"
-cp "${SCRIPT_DIR}/qwen2.5-0.5b-values.yaml" "$SGLANG_VALUES"
+cp "${SCRIPT_DIR}/qwen2.5-0.5b-vllm-values.yaml" "$SGLANG_VALUES"
 
 # Update for SGLang: change container to SGLang
 yq eval '.decode.containers[0].name = "sglang"' -i "$SGLANG_VALUES"

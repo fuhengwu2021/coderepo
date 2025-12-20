@@ -57,7 +57,7 @@ echo "Deploying vLLM ModelService"
 echo "=========================================="
 cd "${LLMD_HOME}/guides/inference-scheduling"
 mkdir -p ms-inference-scheduling
-cp "${SCRIPT_DIR}/qwen2.5-0.5b-values.yaml" ms-inference-scheduling/values.yaml
+cp "${SCRIPT_DIR}/qwen2.5-0.5b-vllm-values.yaml" ms-inference-scheduling/values.yaml
 
 # Update for vLLM (GPU 0)
 yq eval '.decode.extraConfig.nodeSelector."kubernetes.io/hostname" = "k3d-llmd-multiengine-agent-0"' -i ms-inference-scheduling/values.yaml
@@ -71,7 +71,7 @@ echo "=========================================="
 echo "Deploying SGLang ModelService"
 echo "=========================================="
 SGLANG_VALUES="${SCRIPT_DIR}/qwen2.5-0.5b-sglang-values.yaml"
-cp "${SCRIPT_DIR}/qwen2.5-0.5b-values.yaml" "$SGLANG_VALUES"
+# Note: SGLANG_VALUES already exists, no need to copy from vllm values
 
 # Update for SGLang
 yq eval '.decode.containers[0].name = "sglang"' -i "$SGLANG_VALUES"
