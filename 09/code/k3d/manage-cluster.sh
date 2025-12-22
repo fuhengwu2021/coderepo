@@ -192,7 +192,12 @@ show_status() {
     k3d cluster list
     echo ""
     
-    if k3d cluster list | grep -q "$CLUSTER_NAME.*running"; then
+    # Check if cluster is running by checking if servers/agents are running (not 0/1)
+    CLUSTER_STATUS=$(k3d cluster list --no-headers | grep "^$CLUSTER_NAME" | awk '{print $2, $3}' || echo "")
+    if echo "$CLUSTER_STATUS" | grep -qE "[1-9]/[0-9]+.*[1-9]/[0-9]+"; then
+        # Switch to cluster context
+        kubectl config use-context "k3d-$CLUSTER_NAME" 2>/dev/null || true
+        
         echo "📊 Kubernetes nodes:"
         kubectl get nodes 2>/dev/null || echo "  Unable to connect to cluster"
         echo ""
@@ -204,7 +209,7 @@ show_status() {
         echo "📊 Services:"
         kubectl get svc 2>/dev/null | head -10 || echo "  Unable to list services"
     else
-        echo "⚠️  Cluster is not running"
+        echo "⚠️  Cluster is not running (servers/agents: $CLUSTER_STATUS)"
     fi
 }
 
