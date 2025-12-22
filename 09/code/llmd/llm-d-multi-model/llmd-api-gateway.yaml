@@ -83,13 +83,13 @@ spec:
             path: /health
             port: 8000
           initialDelaySeconds: 10
-          periodSeconds: 10
+          periodSeconds: 3600
         readinessProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 5
-          periodSeconds: 5
+          periodSeconds: 1800
       volumes:
       - name: gateway-code
         configMap:

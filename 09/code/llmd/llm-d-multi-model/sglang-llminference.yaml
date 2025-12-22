@@ -74,14 +74,14 @@ spec:
       path: /health
       port: 8000
     initialDelaySeconds: 60
-    periodSeconds: 10
+    periodSeconds: 3600
     timeoutSeconds: 5
   readinessProbe:
     httpGet:
       path: /health
       port: 8000
     initialDelaySeconds: 60
-    periodSeconds: 5
+    periodSeconds: 1800
     timeoutSeconds: 3
   
   # Runtime class for GPU support

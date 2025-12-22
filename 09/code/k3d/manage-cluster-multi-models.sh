@@ -1,18 +1,21 @@
 #!/bin/bash
 # Script to manage k3d cluster with multiple vLLM models (single engine: vLLM only)
+# Uses namespace 'multi-models' to isolate from multi-engines deployment
 # 
 # Usage:
 #   ./manage-cluster-multi-models.sh [stop|start|restart|status]
+#   NAMESPACE=custom-ns ./manage-cluster-multi-models.sh start  # Use custom namespace
 #
 # Examples:
 #   ./manage-cluster-multi-models.sh stop      # Stop the cluster
-#   ./manage-cluster-multi-models.sh start      # Start the cluster (deploys multiple vLLM models)
+#   ./manage-cluster-multi-models.sh start      # Start the cluster (deploys multiple vLLM models in 'multi-models' namespace)
 #   ./manage-cluster-multi-models.sh restart   # Restart the cluster
 #   ./manage-cluster-multi-models.sh status    # Show cluster status
 
 set -e
 
 CLUSTER_NAME="mycluster-gpu"
+NAMESPACE="${NAMESPACE:-multi-models}"  # Namespace for multi-model deployment (vLLM only, multiple models)
 
 # Function to show usage
 show_usage() {
@@ -153,10 +156,26 @@ start_cluster() {
         kubectl config set-cluster "k3d-$CLUSTER_NAME" --server=$(echo $KUBE_SERVER | sed 's/0.0.0.0/127.0.0.1/')
     fi
     
+    # Create namespace for multi-model deployment
+    echo ""
+    echo "📦 Creating namespace: $NAMESPACE"
+    kubectl create namespace "$NAMESPACE" 2>/dev/null || echo "  ✅ Namespace already exists"
+    
+    # Create HF_TOKEN secret in namespace if it doesn't exist
+    if [ -n "$HF_TOKEN" ]; then
+        echo "  🔐 Creating/updating HF_TOKEN secret in namespace..."
+        kubectl create secret generic hf-token-secret \
+          --from-literal=token="$HF_TOKEN" \
+          --namespace "$NAMESPACE" \
+          --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null || echo "    ⚠️  Failed to create secret"
+    else
+        echo "  ⚠️  HF_TOKEN not set, secret may need to be created manually"
+    fi
+    
     # Auto-deploy multiple vLLM models (single engine: vLLM only)
     # This script deploys multiple models using the same inference engine (vLLM)
     echo ""
-    echo "🚀 Checking and deploying vLLM models (multi-model, single engine)..."
+    echo "🚀 Checking and deploying vLLM models (multi-model, single engine) in namespace: $NAMESPACE..."
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     
     # List of vLLM models to deploy
@@ -178,16 +197,16 @@ start_cluster() {
         
         # Check if resource exists based on type
         if [ "$resource_type" = "pod" ]; then
-            if ! kubectl get pod "$resource_name" &>/dev/null; then
+            if ! kubectl get pod "$resource_name" -n "$NAMESPACE" &>/dev/null; then
                 echo "  📦 Deploying $resource_name (Pod)..."
-                kubectl apply -f "$yaml_path" 2>/dev/null || echo "    ⚠️  Failed to deploy $resource_name (may need HF_TOKEN secret or model files)"
+                kubectl apply -f "$yaml_path" -n "$NAMESPACE" 2>/dev/null || echo "    ⚠️  Failed to deploy $resource_name (may need HF_TOKEN secret or model files)"
             else
                 echo "  ✅ $resource_name (Pod) already exists"
             fi
         elif [ "$resource_type" = "deployment" ]; then
-            if ! kubectl get deployment "$resource_name" &>/dev/null; then
+            if ! kubectl get deployment "$resource_name" -n "$NAMESPACE" &>/dev/null; then
                 echo "  📦 Deploying $resource_name (Deployment)..."
-                kubectl apply -f "$yaml_path" 2>/dev/null || echo "    ⚠️  Failed to deploy $resource_name (may need model files)"
+                kubectl apply -f "$yaml_path" -n "$NAMESPACE" 2>/dev/null || echo "    ⚠️  Failed to deploy $resource_name (may need model files)"
             else
                 echo "  ✅ $resource_name (Deployment) already exists"
             fi
@@ -203,8 +222,61 @@ start_cluster() {
     echo "📊 Node status:"
     kubectl get nodes
     echo ""
-    echo "📊 Pod status:"
-    kubectl get pods
+    echo "📊 Pod status in namespace $NAMESPACE:"
+    kubectl get pods -n "$NAMESPACE"
+    echo ""
+    echo "📊 Services in namespace $NAMESPACE:"
+    kubectl get svc -n "$NAMESPACE"
+    
+    # Deploy API Gateway and Ingress (optional, in default namespace)
+    echo ""
+    echo "🌐 Checking API Gateway and Ingress..."
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    
+    # Deploy API Gateway if it doesn't exist
+    if ! kubectl get pod vllm-api-gateway -n default &>/dev/null; then
+        echo "  📦 Deploying API Gateway..."
+        if [ -f "$SCRIPT_DIR/gateway/deploy-gateway.sh" ]; then
+            cd "$SCRIPT_DIR/gateway" && ./deploy-gateway.sh 2>/dev/null || echo "    ⚠️  Failed to deploy Gateway"
+            cd - > /dev/null
+        else
+            echo "    ⚠️  Gateway deployment script not found"
+        fi
+    else
+        echo "  ✅ API Gateway already exists"
+    fi
+    
+    # Deploy Traefik Ingress if it doesn't exist (optional, for production access)
+    if ! kubectl get ingress vllm-api-gateway-ingress -n default &>/dev/null; then
+        echo "  📦 Deploying Traefik Ingress (optional, for HTTPS access)..."
+        # Create TLS secret if it doesn't exist
+        if ! kubectl get secret vllm-api-tls -n default &>/dev/null; then
+            echo "    🔐 Creating TLS certificate..."
+            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+              -keyout /tmp/tls.key \
+              -out /tmp/tls.crt \
+              -subj "/CN=localhost" \
+              -addext "subjectAltName=DNS:localhost,DNS:*.localhost,IP:127.0.0.1,IP:::1" 2>/dev/null || echo "      ⚠️  OpenSSL not available, skipping TLS secret"
+            
+            if [ -f /tmp/tls.crt ] && [ -f /tmp/tls.key ]; then
+                kubectl create secret tls vllm-api-tls \
+                  --cert=/tmp/tls.crt \
+                  --key=/tmp/tls.key \
+                  -n default 2>/dev/null || echo "      ⚠️  Failed to create TLS secret"
+                rm -f /tmp/tls.crt /tmp/tls.key
+            fi
+        fi
+        
+        # Apply Ingress configuration
+        if [ -f "$SCRIPT_DIR/gateway/ingress-tls-traefik.yaml" ]; then
+            kubectl apply -f "$SCRIPT_DIR/gateway/ingress-tls-traefik.yaml" 2>/dev/null || echo "    ⚠️  Failed to deploy Ingress"
+            echo "    ✅ Ingress deployed (access via https://localhost)"
+        else
+            echo "    ⚠️  Ingress YAML not found: $SCRIPT_DIR/gateway/ingress-tls-traefik.yaml"
+        fi
+    else
+        echo "  ✅ Traefik Ingress already exists"
+    fi
 }
 
 # Function to restart cluster
@@ -240,12 +312,16 @@ show_status() {
         kubectl get nodes 2>/dev/null || echo "  Unable to connect to cluster"
         echo ""
         
-        echo "📊 Pods:"
-        kubectl get pods 2>/dev/null || echo "  Unable to list pods"
+        echo "📊 Namespaces:"
+        kubectl get namespaces 2>/dev/null | grep -E "multi-engines|multi-models|NAME" || echo "  Unable to list namespaces"
         echo ""
         
-        echo "📊 Services:"
-        kubectl get svc 2>/dev/null | head -10 || echo "  Unable to list services"
+        echo "📊 Pods in namespace $NAMESPACE:"
+        kubectl get pods -n "$NAMESPACE" 2>/dev/null || echo "  Unable to list pods in namespace $NAMESPACE"
+        echo ""
+        
+        echo "📊 Services in namespace $NAMESPACE:"
+        kubectl get svc -n "$NAMESPACE" 2>/dev/null | head -10 || echo "  Unable to list services in namespace $NAMESPACE"
     else
         echo "⚠️  Cluster is not running (servers/agents: $CLUSTER_STATUS)"
     fi

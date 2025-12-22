@@ -1,18 +1,21 @@
 #!/bin/bash
 # Script to manage k3d cluster with multiple inference engines (vLLM + SGLang)
+# Uses namespace 'multi-engines' to isolate from multi-models deployment
 # 
 # Usage:
 #   ./manage-cluster-multi-engines.sh [stop|start|restart|status]
+#   NAMESPACE=custom-ns ./manage-cluster-multi-engines.sh start  # Use custom namespace
 #
 # Examples:
 #   ./manage-cluster-multi-engines.sh stop      # Stop the cluster
-#   ./manage-cluster-multi-engines.sh start     # Start the cluster (deploys vLLM + SGLang)
+#   ./manage-cluster-multi-engines.sh start     # Start the cluster (deploys vLLM + SGLang in 'multi-engines' namespace)
 #   ./manage-cluster-multi-engines.sh restart   # Restart the cluster
 #   ./manage-cluster-multi-engines.sh status    # Show cluster status
 
 set -e
 
 CLUSTER_NAME="mycluster-gpu"
+NAMESPACE="${NAMESPACE:-multi-engines}"  # Namespace for multi-engine deployment (vLLM + SGLang)
 
 # Function to show usage
 show_usage() {
@@ -153,17 +156,36 @@ start_cluster() {
         kubectl config set-cluster "k3d-$CLUSTER_NAME" --server=$(echo $KUBE_SERVER | sed 's/0.0.0.0/127.0.0.1/')
     fi
     
-    # Auto-deploy LLM serving pods (multiple engines: vLLM + SGLang)
+    # Create namespace for multi-engine deployment
     echo ""
-    echo "🚀 Checking and deploying LLM serving pods (multi-engine: vLLM + SGLang)..."
+    echo "📦 Creating namespace: $NAMESPACE"
+    kubectl create namespace "$NAMESPACE" 2>/dev/null || echo "  ✅ Namespace already exists"
+    
+    # Create HF_TOKEN secret in namespace if it doesn't exist
+    if [ -n "$HF_TOKEN" ]; then
+        echo "  🔐 Creating/updating HF_TOKEN secret in namespace..."
+        kubectl create secret generic hf-token-secret \
+          --from-literal=token="$HF_TOKEN" \
+          --namespace "$NAMESPACE" \
+          --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null || echo "    ⚠️  Failed to create secret"
+    else
+        echo "  ⚠️  HF_TOKEN not set, secret may need to be created manually"
+    fi
+    
+    # Auto-deploy LLM serving pods (multiple engines: vLLM + SGLang)
+    # This script only deploys two services:
+    #   1. vLLM Service (Llama-3.2-1B)
+    #   2. SGLang Service (Llama-3.2-1B)
+    echo ""
+    echo "🚀 Checking and deploying LLM serving pods (multi-engine: vLLM + SGLang) in namespace: $NAMESPACE..."
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     
     # Deploy vLLM Llama-3.2-1B deployment if it doesn't exist
     # Note: vLLM now uses Deployment (vllm-llama-32-1b-pod), not direct Pod
-    if ! kubectl get deployment vllm-llama-32-1b-pod &>/dev/null; then
+    if ! kubectl get deployment vllm-llama-32-1b-pod -n "$NAMESPACE" &>/dev/null; then
         echo "  📦 Deploying vLLM Llama-3.2-1B deployment..."
         if [ -f "$SCRIPT_DIR/vllm/llama-3.2-1b.yaml" ]; then
-            kubectl apply -f "$SCRIPT_DIR/vllm/llama-3.2-1b.yaml" 2>/dev/null || echo "    ⚠️  Failed to deploy vLLM deployment (may need HF_TOKEN secret)"
+            kubectl apply -f "$SCRIPT_DIR/vllm/llama-3.2-1b.yaml" -n "$NAMESPACE" 2>/dev/null || echo "    ⚠️  Failed to deploy vLLM deployment (may need HF_TOKEN secret)"
         else
             echo "    ⚠️  vLLM YAML file not found: $SCRIPT_DIR/vllm/llama-3.2-1b.yaml"
         fi
@@ -171,16 +193,17 @@ start_cluster() {
         echo "  ✅ vLLM Llama-3.2-1B deployment already exists"
     fi
     
-    # Deploy SGLang Llama-3.2-1B pod if it doesn't exist
-    if ! kubectl get pod sglang-llama-32-1b &>/dev/null; then
-        echo "  📦 Deploying SGLang Llama-3.2-1B pod..."
+    # Deploy SGLang Llama-3.2-1B deployment if it doesn't exist
+    # Note: SGLang now uses Deployment (sglang-llama-32-1b-pod), not direct Pod
+    if ! kubectl get deployment sglang-llama-32-1b-pod -n "$NAMESPACE" &>/dev/null; then
+        echo "  📦 Deploying SGLang Llama-3.2-1B deployment..."
         if [ -f "$SCRIPT_DIR/sglang/llama-3.2-1b.yaml" ]; then
-            kubectl apply -f "$SCRIPT_DIR/sglang/llama-3.2-1b.yaml" 2>/dev/null || echo "    ⚠️  Failed to deploy SGLang pod (may need HF_TOKEN secret)"
+            kubectl apply -f "$SCRIPT_DIR/sglang/llama-3.2-1b.yaml" -n "$NAMESPACE" 2>/dev/null || echo "    ⚠️  Failed to deploy SGLang deployment (may need HF_TOKEN secret)"
         else
             echo "    ⚠️  SGLang YAML file not found: $SCRIPT_DIR/sglang/llama-3.2-1b.yaml"
         fi
     else
-        echo "  ✅ SGLang Llama-3.2-1B pod already exists"
+        echo "  ✅ SGLang Llama-3.2-1B deployment already exists"
     fi
     
     echo ""
@@ -192,8 +215,61 @@ start_cluster() {
     echo "📊 Node status:"
     kubectl get nodes
     echo ""
-    echo "📊 Pod status:"
-    kubectl get pods
+    echo "📊 Pod status in namespace $NAMESPACE:"
+    kubectl get pods -n "$NAMESPACE"
+    echo ""
+    echo "📊 Services in namespace $NAMESPACE:"
+    kubectl get svc -n "$NAMESPACE"
+    
+    # Deploy API Gateway and Ingress (optional, in default namespace)
+    echo ""
+    echo "🌐 Checking API Gateway and Ingress..."
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    
+    # Deploy API Gateway if it doesn't exist
+    if ! kubectl get pod vllm-api-gateway -n default &>/dev/null; then
+        echo "  📦 Deploying API Gateway..."
+        if [ -f "$SCRIPT_DIR/gateway/deploy-gateway.sh" ]; then
+            cd "$SCRIPT_DIR/gateway" && ./deploy-gateway.sh 2>/dev/null || echo "    ⚠️  Failed to deploy Gateway"
+            cd - > /dev/null
+        else
+            echo "    ⚠️  Gateway deployment script not found"
+        fi
+    else
+        echo "  ✅ API Gateway already exists"
+    fi
+    
+    # Deploy Traefik Ingress if it doesn't exist (optional, for production access)
+    if ! kubectl get ingress vllm-api-gateway-ingress -n default &>/dev/null; then
+        echo "  📦 Deploying Traefik Ingress (optional, for HTTPS access)..."
+        # Create TLS secret if it doesn't exist
+        if ! kubectl get secret vllm-api-tls -n default &>/dev/null; then
+            echo "    🔐 Creating TLS certificate..."
+            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+              -keyout /tmp/tls.key \
+              -out /tmp/tls.crt \
+              -subj "/CN=localhost" \
+              -addext "subjectAltName=DNS:localhost,DNS:*.localhost,IP:127.0.0.1,IP:::1" 2>/dev/null || echo "      ⚠️  OpenSSL not available, skipping TLS secret"
+            
+            if [ -f /tmp/tls.crt ] && [ -f /tmp/tls.key ]; then
+                kubectl create secret tls vllm-api-tls \
+                  --cert=/tmp/tls.crt \
+                  --key=/tmp/tls.key \
+                  -n default 2>/dev/null || echo "      ⚠️  Failed to create TLS secret"
+                rm -f /tmp/tls.crt /tmp/tls.key
+            fi
+        fi
+        
+        # Apply Ingress configuration
+        if [ -f "$SCRIPT_DIR/gateway/ingress-tls-traefik.yaml" ]; then
+            kubectl apply -f "$SCRIPT_DIR/gateway/ingress-tls-traefik.yaml" 2>/dev/null || echo "    ⚠️  Failed to deploy Ingress"
+            echo "    ✅ Ingress deployed (access via https://localhost)"
+        else
+            echo "    ⚠️  Ingress YAML not found: $SCRIPT_DIR/gateway/ingress-tls-traefik.yaml"
+        fi
+    else
+        echo "  ✅ Traefik Ingress already exists"
+    fi
 }
 
 # Function to restart cluster
@@ -229,12 +305,16 @@ show_status() {
         kubectl get nodes 2>/dev/null || echo "  Unable to connect to cluster"
         echo ""
         
-        echo "📊 Pods:"
-        kubectl get pods 2>/dev/null || echo "  Unable to list pods"
+        echo "📊 Namespaces:"
+        kubectl get namespaces 2>/dev/null | grep -E "multi-engines|multi-models|NAME" || echo "  Unable to list namespaces"
         echo ""
         
-        echo "📊 Services:"
-        kubectl get svc 2>/dev/null | head -10 || echo "  Unable to list services"
+        echo "📊 Pods in namespace $NAMESPACE:"
+        kubectl get pods -n "$NAMESPACE" 2>/dev/null || echo "  Unable to list pods in namespace $NAMESPACE"
+        echo ""
+        
+        echo "📊 Services in namespace $NAMESPACE:"
+        kubectl get svc -n "$NAMESPACE" 2>/dev/null | head -10 || echo "  Unable to list services in namespace $NAMESPACE"
     else
         echo "⚠️  Cluster is not running (servers/agents: $CLUSTER_STATUS)"
     fi

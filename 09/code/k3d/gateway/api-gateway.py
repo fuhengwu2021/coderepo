@@ -67,20 +67,21 @@ def load_routing_config(config_path: str = "/app/routing-config.yaml") -> Dict[T
         logger.error(f"Failed to load routing config from {config_path}: {e}, using default hardcoded config")
     
     # Fallback to default hardcoded configuration
+    # Note: Service names include namespace for cross-namespace access
     logger.info("Using default hardcoded routing configuration")
     return {
-        # vLLM services
-        ("meta-llama/Llama-3.2-1B-Instruct", "vllm"): "vllm-llama-32-1b-service",
-        ("meta-llama/Llama-3.2-1B-Instruct", None): "vllm-llama-32-1b-service",  # Default to vLLM if not specified
+        # vLLM services (multi-engines namespace)
+        ("meta-llama/Llama-3.2-1B-Instruct", "vllm"): "vllm-llama-32-1b-service.multi-engines.svc.cluster.local",
+        ("meta-llama/Llama-3.2-1B-Instruct", None): "vllm-llama-32-1b-service.multi-engines.svc.cluster.local",  # Default to vLLM if not specified
         
-        # Phi-tiny-MoE (vLLM)
-        ("/models/Phi-tiny-MoE-instruct", "vllm"): "vllm-phi-tiny-moe-service",
-        ("/models/Phi-tiny-MoE-instruct", None): "vllm-phi-tiny-moe-service",  # Default to vLLM if not specified
-        ("Phi-tiny-MoE-instruct", "vllm"): "vllm-phi-tiny-moe-service",  # Also support without /models/ prefix
-        ("Phi-tiny-MoE-instruct", None): "vllm-phi-tiny-moe-service",
+        # Phi-tiny-MoE (vLLM) - multi-models namespace
+        ("/models/Phi-tiny-MoE-instruct", "vllm"): "vllm-phi-tiny-moe-service.multi-models.svc.cluster.local",
+        ("/models/Phi-tiny-MoE-instruct", None): "vllm-phi-tiny-moe-service.multi-models.svc.cluster.local",  # Default to vLLM if not specified
+        ("Phi-tiny-MoE-instruct", "vllm"): "vllm-phi-tiny-moe-service.multi-models.svc.cluster.local",  # Also support without /models/ prefix
+        ("Phi-tiny-MoE-instruct", None): "vllm-phi-tiny-moe-service.multi-models.svc.cluster.local",
         
-        # SGLang services
-        ("meta-llama/Llama-3.2-1B-Instruct", "sglang"): "sglang-llama-32-1b",
+        # SGLang services (multi-engines namespace)
+        ("meta-llama/Llama-3.2-1B-Instruct", "sglang"): "sglang-llama-32-1b-service.multi-engines.svc.cluster.local",
     }
 
 # Routing configuration (loaded from file or using defaults)
@@ -256,38 +257,16 @@ async def list_models():
     """List all available models from all inference services
     
     Each (model, engine) combination is shown as a separate model entry.
+    Uses the actual owned_by from service responses, not from routing config.
     """
     models = []
-    seen_keys = set()  # Track (model_id, inference_server) combinations
+    seen_keys = set()  # Track (model_id, owned_by) combinations to avoid duplicates
     
-    # Build mapping: service_name -> list of (model_name, inference_server) tuples
-    # But filter out None (default) mappings if there's already a specific engine for the same model+service
-    service_to_mappings = {}
-    model_service_has_specific_engine = {}  # Track if a model+service has specific engines
+    # Get unique services from routing config
+    unique_services = {service for service in ROUTING_CONFIG.values() if service is not None}
     
-    # First pass: collect all mappings and track which have specific engines
-    for (model_name, inference_server), service_name in ROUTING_CONFIG.items():
-        if service_name and service_name is not None:
-            key = (model_name, service_name)
-            if inference_server is not None:
-                model_service_has_specific_engine[key] = True
-            elif key not in model_service_has_specific_engine:
-                model_service_has_specific_engine[key] = False
-    
-    # Second pass: build mappings, skipping None if specific engine exists
-    for (model_name, inference_server), service_name in ROUTING_CONFIG.items():
-        if service_name and service_name is not None:
-            key = (model_name, service_name)
-            # Skip None (default) mapping if there's already a specific engine for this model+service
-            if inference_server is None and model_service_has_specific_engine.get(key, False):
-                continue  # Skip default mapping since we have specific engines
-            
-            if service_name not in service_to_mappings:
-                service_to_mappings[service_name] = []
-            service_to_mappings[service_name].append((model_name, inference_server))
-    
-    # For each service, get models and create entries for each (model, engine) combination
-    for service_name, mappings in service_to_mappings.items():
+    # For each service, get models directly from the service
+    for service_name in unique_services:
         try:
             # Get models from the service
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -298,45 +277,74 @@ async def list_models():
                         # For each model returned by the service
                         for model in data["data"]:
                             model_id = model.get("id", "")
+                            owned_by = model.get("owned_by", "unknown")
+                            
                             if model_id:
-                                # Find matching mappings for this model
-                                for model_name, inference_server in mappings:
-                                    # Check if this model matches the mapping
-                                    # Use fuzzy matching: model_id should match model_name
-                                    if model_id == model_name or model_name in model_id or model_id in model_name:
-                                        # Create unique key: (model_id, inference_server)
-                                        key = (model_id, inference_server)
-                                        if key not in seen_keys:
-                                            seen_keys.add(key)
-                                            engine_name = inference_server or "default"
-                                            
-                                            # Create a separate model entry for each engine
-                                            model_entry = model.copy()
-                                            model_entry["id"] = model_id  # Clean base model ID
-                                            # Remove permission field if present (it's vLLM-specific)
-                                            model_entry.pop("permission", None)
-                                            # Remove engine field - owned_by already indicates the engine
-                                            model_entry.pop("engine", None)
-                                            # Ensure owned_by is set to the engine name
-                                            model_entry["owned_by"] = engine_name
-                                            models.append(model_entry)
+                                # Normalize model_id (remove /models/ prefix if present)
+                                normalized_id = model_id[8:] if model_id.startswith("/models/") else model_id
+                                
+                                # Infer owned_by from service name if not provided or is "default"
+                                if owned_by == "default" or owned_by == "unknown":
+                                    if "sglang" in service_name.lower():
+                                        owned_by = "sglang"
+                                    elif "vllm" in service_name.lower():
+                                        owned_by = "vllm"
+                                
+                                # Create unique key: (normalized_model_id, owned_by) to avoid duplicates
+                                key = (normalized_id, owned_by)
+                                if key not in seen_keys:
+                                    seen_keys.add(key)
+                                    
+                                    # Create model entry using the service's response
+                                    model_entry = model.copy()
+                                    # Use normalized ID
+                                    model_entry["id"] = normalized_id
+                                    # Remove permission field if present (it's vLLM-specific)
+                                    model_entry.pop("permission", None)
+                                    # Remove engine field - owned_by already indicates the engine
+                                    model_entry.pop("engine", None)
+                                    # Set owned_by (use inferred value if service returned "default")
+                                    model_entry["owned_by"] = owned_by
+                                    models.append(model_entry)
         except Exception as e:
             logger.warning(f"Failed to get models from {service_name}: {e}")
     
     # If no models from services, add fallback from routing config
+    # But only add unique (model, engine) combinations, avoiding "default" owned_by
     if not models:
+        # Track which models have specific engines
+        model_engines = {}  # model_name -> set of engines
+        
+        # First pass: collect all engines for each model
         for (model_name, inference_server), service_name in ROUTING_CONFIG.items():
             if model_name and service_name is not None:
-                key = (model_name, inference_server)
+                normalized_name = model_name[8:] if model_name.startswith("/models/") else model_name
+                
+                # Infer engine from service name if inference_server is None
+                if inference_server:
+                    engine = inference_server
+                elif "sglang" in service_name.lower():
+                    engine = "sglang"
+                elif "vllm" in service_name.lower():
+                    engine = "vllm"
+                else:
+                    continue  # Skip unknown engines
+                
+                if normalized_name not in model_engines:
+                    model_engines[normalized_name] = set()
+                model_engines[normalized_name].add(engine)
+        
+        # Second pass: add models with their engines
+        for normalized_name, engines in model_engines.items():
+            for engine in engines:
+                key = (normalized_name, engine)
                 if key not in seen_keys:
                     seen_keys.add(key)
-                    engine_name = inference_server or "default"
-                    
                     models.append({
-                        "id": model_name,
+                        "id": normalized_name,
                         "object": "model",
                         "created": 0,
-                        "owned_by": engine_name  # Use engine name as owned_by
+                        "owned_by": engine
                     })
     
     return models
