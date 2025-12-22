@@ -160,27 +160,37 @@ start_cluster() {
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     
     # List of vLLM models to deploy
-    # Format: "yaml_file_path:pod_name"
-    # Pod names are extracted from actual YAML files in vllm/ directory
+    # Format: "yaml_file_path:resource_name:resource_type"
+    # resource_type: "deployment" for Deployment resources (both models use Deployment for consistency)
     VLLM_MODELS=(
-        "vllm/llama-3.2-1b.yaml:vllm-llama-32-1b"      # From vllm/llama-3.2-1b.yaml
-        "vllm/phi-tiny-moe.yaml:vllm-phi-tiny-moe"      # From vllm/phi-tiny-moe.yaml
+        "vllm/llama-3.2-1b.yaml:vllm-llama-32-1b-pod:deployment"      # Deployment resource
+        "vllm/phi-tiny-moe.yaml:vllm-phi-tiny-moe-pod:deployment"      # Deployment resource
     )
     
     for model_config in "${VLLM_MODELS[@]}"; do
-        IFS=':' read -r yaml_file pod_name <<< "$model_config"
+        IFS=':' read -r yaml_file resource_name resource_type <<< "$model_config"
         yaml_path="$SCRIPT_DIR/$yaml_file"
         
         if [ ! -f "$yaml_path" ]; then
-            echo "  ⚠️  Skipping $pod_name (YAML not found: $yaml_path)"
+            echo "  ⚠️  Skipping $resource_name (YAML not found: $yaml_path)"
             continue
         fi
         
-        if ! kubectl get pod "$pod_name" &>/dev/null; then
-            echo "  📦 Deploying $pod_name..."
-            kubectl apply -f "$yaml_path" 2>/dev/null || echo "    ⚠️  Failed to deploy $pod_name (may need HF_TOKEN secret or model files)"
-        else
-            echo "  ✅ $pod_name already exists"
+        # Check if resource exists based on type
+        if [ "$resource_type" = "pod" ]; then
+            if ! kubectl get pod "$resource_name" &>/dev/null; then
+                echo "  📦 Deploying $resource_name (Pod)..."
+                kubectl apply -f "$yaml_path" 2>/dev/null || echo "    ⚠️  Failed to deploy $resource_name (may need HF_TOKEN secret or model files)"
+            else
+                echo "  ✅ $resource_name (Pod) already exists"
+            fi
+        elif [ "$resource_type" = "deployment" ]; then
+            if ! kubectl get deployment "$resource_name" &>/dev/null; then
+                echo "  📦 Deploying $resource_name (Deployment)..."
+                kubectl apply -f "$yaml_path" 2>/dev/null || echo "    ⚠️  Failed to deploy $resource_name (may need model files)"
+            else
+                echo "  ✅ $resource_name (Deployment) already exists"
+            fi
         fi
     done
     

@@ -6,11 +6,11 @@ routing:
   # vLLM services
   - model: "meta-llama/Llama-3.2-1B-Instruct"
     inference_server: "vllm"
-    service_name: "vllm-llama-32-1b"
+    service_name: "vllm-llama-32-1b-service"
   
   - model: "meta-llama/Llama-3.2-1B-Instruct"
     inference_server: null  # Default to vLLM if not specified
-    service_name: "vllm-llama-32-1b"
+    service_name: "vllm-llama-32-1b-service"
   
   # Phi-tiny-MoE (vLLM)
   - model: "/models/Phi-tiny-MoE-instruct"

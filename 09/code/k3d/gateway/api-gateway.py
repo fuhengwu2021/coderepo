@@ -70,8 +70,8 @@ def load_routing_config(config_path: str = "/app/routing-config.yaml") -> Dict[T
     logger.info("Using default hardcoded routing configuration")
     return {
         # vLLM services
-        ("meta-llama/Llama-3.2-1B-Instruct", "vllm"): "vllm-llama-32-1b",
-        ("meta-llama/Llama-3.2-1B-Instruct", None): "vllm-llama-32-1b",  # Default to vLLM if not specified
+        ("meta-llama/Llama-3.2-1B-Instruct", "vllm"): "vllm-llama-32-1b-service",
+        ("meta-llama/Llama-3.2-1B-Instruct", None): "vllm-llama-32-1b-service",  # Default to vLLM if not specified
         
         # Phi-tiny-MoE (vLLM)
         ("/models/Phi-tiny-MoE-instruct", "vllm"): "vllm-phi-tiny-moe-service",

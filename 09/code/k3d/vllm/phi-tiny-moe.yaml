@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: vllm-phi-tiny-moe
+  name: vllm-phi-tiny-moe-pod
   labels:
     app: vllm
     model: phi-tiny-moe
@@ -82,21 +82,23 @@ spec:
   - port: 8000
     targetPort: 8000
     name: http
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: vllm-phi-tiny-moe-nodeport
-  labels:
-    app: vllm
-    model: phi-tiny-moe
-spec:
-  type: NodePort
-  selector:
-    app: vllm
-    model: phi-tiny-moe
-  ports:
-  - port: 8000
-    targetPort: 8000
-    nodePort: 30081
-    name: http
+# NodePort service removed - use API Gateway for external access instead
+# If you need direct external access, uncomment and deploy this service:
+# ---
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: vllm-phi-tiny-moe-nodeport
+#   labels:
+#     app: vllm
+#     model: phi-tiny-moe
+# spec:
+#   type: NodePort
+#   selector:
+#     app: vllm
+#     model: phi-tiny-moe
+#   ports:
+#   - port: 8000
+#     targetPort: 8000
+#     nodePort: 30081
+#     name: http

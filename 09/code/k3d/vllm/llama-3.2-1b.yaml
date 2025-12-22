@@ -1,5 +1,5 @@
 # vLLM Serving for Llama-3.2-1B-Instruct
-# 一个完整的配置文件，包含 Pod 和 Service
+# 一个完整的配置文件，包含 Deployment 和 Service
 # 注意：meta-llama/Llama-3.2-1B-Instruct 是 gated repo，需要 HF_TOKEN
 
 ---
@@ -7,85 +7,95 @@
 # 创建命令: kubectl create secret generic hf-token-secret --from-literal=token="$HF_TOKEN"
 # 或者: kubectl create secret generic hf-token-secret --from-env-file=<(echo "token=$HF_TOKEN")
 ---
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: vllm-llama-32-1b
+  name: vllm-llama-32-1b-pod
   labels:
     app: vllm
     model: llama-32-1b
 spec:
-  runtimeClassName: nvidia
-  containers:
-  - name: vllm-server
-    image: vllm/vllm-openai:v0.12.0
-    command:
-    - python3
-    - -m
-    - vllm.entrypoints.openai.api_server
-    args:
-    - --model
-    - meta-llama/Llama-3.2-1B-Instruct
-    - --host
-    - "0.0.0.0"
-    - --port
-    - "8000"
-    - --tensor-parallel-size
-    - "1"
-    - --gpu-memory-utilization
-    - "0.2"  # Use 20% of GPU memory (reduced from 0.9 to allow multiple models)
-    - --trust-remote-code
-    env:
-    - name: HF_HOME
-      value: "/models/hub"
-    - name: TRANSFORMERS_CACHE
-      value: "/models/hub"
-    - name: HF_HUB_CACHE
-      value: "/models/hub"
-    - name: HF_TOKEN
-      valueFrom:
-        secretKeyRef:
-          name: hf-token-secret
-          key: token
-    ports:
-    - containerPort: 8000
-      name: http
-    resources:
-      limits:
-        nvidia.com/gpu: 1
-        memory: 8Gi
-      requests:
-        nvidia.com/gpu: 1
-        memory: 6Gi
-    volumeMounts:
-    - name: models
-      mountPath: /models
-    livenessProbe:
-      httpGet:
-        path: /health
-        port: 8000
-      initialDelaySeconds: 60
-      periodSeconds: 10
-      timeoutSeconds: 5
-    readinessProbe:
-      httpGet:
-        path: /health
-        port: 8000
-      initialDelaySeconds: 60
-      periodSeconds: 5
-      timeoutSeconds: 3
-  volumes:
-  - name: models
-    hostPath:
-      path: /models  # k3d 容器内路径，对应主机的 /raid/models
-      type: Directory
-  restartPolicy: Always
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm
+      model: llama-32-1b
+  template:
+    metadata:
+      labels:
+        app: vllm
+        model: llama-32-1b
+    spec:
+      runtimeClassName: nvidia
+      containers:
+      - name: vllm-server
+        image: vllm/vllm-openai:v0.12.0
+        command:
+        - python3
+        - -m
+        - vllm.entrypoints.openai.api_server
+        args:
+        - --model
+        - meta-llama/Llama-3.2-1B-Instruct
+        - --host
+        - "0.0.0.0"
+        - --port
+        - "8000"
+        - --tensor-parallel-size
+        - "1"
+        - --gpu-memory-utilization
+        - "0.2"  # Use 20% of GPU memory (reduced from 0.9 to allow multiple models)
+        - --trust-remote-code
+        env:
+        - name: HF_HOME
+          value: "/models/hub"
+        - name: TRANSFORMERS_CACHE
+          value: "/models/hub"
+        - name: HF_HUB_CACHE
+          value: "/models/hub"
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token-secret
+              key: token
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: 8Gi
+          requests:
+            nvidia.com/gpu: 1
+            memory: 6Gi
+        volumeMounts:
+        - name: models
+          mountPath: /models
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 5
+          timeoutSeconds: 3
+      volumes:
+      - name: models
+        hostPath:
+          path: /models  # k3d 容器内路径，对应主机的 /raid/models
+          type: Directory
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: vllm-llama-32-1b
+  name: vllm-llama-32-1b-service
   labels:
     app: vllm
     model: llama-32-1b
