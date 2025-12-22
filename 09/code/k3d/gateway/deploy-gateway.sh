@@ -9,12 +9,18 @@ echo ""
 # Check if Gateway code file exists
 if [ ! -f "api-gateway.py" ]; then
     echo "❌ Error: api-gateway.py not found in current directory"
-    echo "   Please run this script from the code/ directory"
+    echo "   Please run this script from the gateway/ directory"
     exit 1
 fi
 
-# Deploy Gateway
-echo "📦 Applying api-gateway.yaml..."
+# Generate ConfigMap from Python file (single source of truth)
+echo "📝 Generating ConfigMap from api-gateway.py..."
+kubectl create configmap vllm-api-gateway-code \
+  --from-file=api-gateway.py=api-gateway.py \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# Deploy Gateway (Pod and Service)
+echo "📦 Applying Pod and Service..."
 kubectl apply -f api-gateway.yaml
 
 echo ""
