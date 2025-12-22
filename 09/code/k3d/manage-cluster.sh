@@ -38,6 +38,32 @@ stop_cluster() {
         exit 1
     fi
     
+    # Stop port-forward processes before stopping cluster
+    # This prevents orphaned processes when cluster stops
+    echo "Checking for active port-forward processes..."
+    PF_PIDS=$(pgrep -f "kubectl port-forward" 2>/dev/null || true)
+    if [ -n "$PF_PIDS" ]; then
+        echo "  Found port-forward processes, stopping them..."
+        for pid in $PF_PIDS; do
+            # Get the command line to show what we're stopping
+            PF_CMD=$(ps -p $pid -o args= 2>/dev/null | head -1 || echo "unknown")
+            echo "    Stopping port-forward (PID: $pid): $PF_CMD"
+            kill $pid 2>/dev/null || true
+        done
+        sleep 1
+        # Force kill if still running
+        for pid in $PF_PIDS; do
+            if ps -p $pid > /dev/null 2>&1; then
+                echo "    Force killing port-forward (PID: $pid)..."
+                kill -9 $pid 2>/dev/null || true
+            fi
+        done
+        echo "  ✅ Port-forward processes stopped"
+    else
+        echo "  No port-forward processes found"
+    fi
+    echo ""
+    
     echo "Stopping cluster..."
     k3d cluster stop "$CLUSTER_NAME"
     
