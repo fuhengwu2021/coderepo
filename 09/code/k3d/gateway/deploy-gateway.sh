@@ -13,11 +13,20 @@ if [ ! -f "api-gateway.py" ]; then
     exit 1
 fi
 
-# Generate ConfigMap from Python file (single source of truth)
-echo "📝 Generating ConfigMap from api-gateway.py..."
-kubectl create configmap vllm-api-gateway-code \
-  --from-file=api-gateway.py=api-gateway.py \
-  --dry-run=client -o yaml | kubectl apply -f -
+# Generate ConfigMap from Python file and routing config (single source of truth)
+echo "📝 Generating ConfigMap from api-gateway.py and routing-config.yaml..."
+if [ -f "routing-config.yaml" ]; then
+    kubectl create configmap vllm-api-gateway-code \
+      --from-file=api-gateway.py=api-gateway.py \
+      --from-file=routing-config.yaml=routing-config.yaml \
+      --dry-run=client -o yaml | kubectl apply -f -
+    echo "✅ ConfigMap includes both api-gateway.py and routing-config.yaml"
+else
+    kubectl create configmap vllm-api-gateway-code \
+      --from-file=api-gateway.py=api-gateway.py \
+      --dry-run=client -o yaml | kubectl apply -f -
+    echo "⚠️  routing-config.yaml not found, using default hardcoded routing config"
+fi
 
 # Deploy Gateway (Pod and Service)
 echo "📦 Applying Pod and Service..."

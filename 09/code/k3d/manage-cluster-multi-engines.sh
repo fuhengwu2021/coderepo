@@ -1,14 +1,14 @@
 #!/bin/bash
-# Script to manage k3d cluster (stop/start/status)
+# Script to manage k3d cluster with multiple inference engines (vLLM + SGLang)
 # 
 # Usage:
-#   ./manage-cluster.sh [stop|start|restart|status]
+#   ./manage-cluster-multi-engines.sh [stop|start|restart|status]
 #
 # Examples:
-#   ./manage-cluster.sh stop      # Stop the cluster
-#   ./manage-cluster.sh start     # Start the cluster
-#   ./manage-cluster.sh restart   # Restart the cluster
-#   ./manage-cluster.sh status    # Show cluster status
+#   ./manage-cluster-multi-engines.sh stop      # Stop the cluster
+#   ./manage-cluster-multi-engines.sh start     # Start the cluster (deploys vLLM + SGLang)
+#   ./manage-cluster-multi-engines.sh restart   # Restart the cluster
+#   ./manage-cluster-multi-engines.sh status    # Show cluster status
 
 set -e
 
@@ -153,9 +153,9 @@ start_cluster() {
         kubectl config set-cluster "k3d-$CLUSTER_NAME" --server=$(echo $KUBE_SERVER | sed 's/0.0.0.0/127.0.0.1/')
     fi
     
-    # Auto-deploy LLM serving pods if they don't exist
+    # Auto-deploy LLM serving pods (multiple engines: vLLM + SGLang)
     echo ""
-    echo "🚀 Checking and deploying LLM serving pods..."
+    echo "🚀 Checking and deploying LLM serving pods (multi-engine: vLLM + SGLang)..."
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     
     # Deploy vLLM Llama-3.2-1B pod if it doesn't exist

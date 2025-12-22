@@ -21,12 +21,24 @@ This directory contains Kubernetes deployment configurations for vLLM models.
 ### Deploy Llama-3.2-1B-Instruct
 
 ```bash
+cd /path/to/coderepo/09/code/k3d/vllm
+./deploy-llama-3.2-1b.sh
+```
+
+Or from the `k3d/` directory:
+```bash
 cd vllm/
 ./deploy-llama-3.2-1b.sh
 ```
 
 ### Deploy Phi-tiny-MoE-instruct
 
+```bash
+cd /path/to/coderepo/09/code/k3d/vllm
+./deploy-phi-tiny-moe.sh
+```
+
+Or from the `k3d/` directory:
 ```bash
 cd vllm/
 ./deploy-phi-tiny-moe.sh
@@ -106,7 +118,15 @@ curl http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-The Gateway automatically routes requests based on the `model` field in the request body.
+The Gateway automatically routes requests based on the `model` and `owned_by` fields in the request body.
+
+**To deploy the Gateway:**
+```bash
+cd ../gateway
+./deploy-gateway.sh
+```
+
+See `../gateway/README.md` for more details on Gateway deployment and configuration.
 
 ## Troubleshooting
 
@@ -143,17 +163,33 @@ The Gateway automatically routes requests based on the `model` field in the requ
 ## File Structure
 
 ```
-vllm/
-├── llama-3.2-1b.yaml          # Llama-3.2-1B-Instruct deployment
-├── deploy-llama-3.2-1b.sh    # Llama deployment script
-├── phi-tiny-moe.yaml          # Phi-tiny-MoE-instruct deployment
-├── deploy-phi-tiny-moe.sh     # Phi-tiny-MoE deployment script
-└── README.md                  # This file
-
-Note: API Gateway files (api-gateway.yaml, api-gateway.py, deploy-gateway.sh, ingress files, etc.) have been moved to the parent code/ directory as they are generic and support both vLLM and SGLang.
+k3d/
+├── vllm/                      # vLLM model deployments
+│   ├── llama-3.2-1b.yaml          # Llama-3.2-1B-Instruct deployment
+│   ├── deploy-llama-3.2-1b.sh     # Llama deployment script
+│   ├── phi-tiny-moe.yaml          # Phi-tiny-MoE-instruct deployment
+│   ├── deploy-phi-tiny-moe.sh     # Phi-tiny-MoE deployment script
+│   ├── mistral-7b.yaml            # Mistral-7B deployment (if available)
+│   └── README.md                  # This file
+├── sglang/                    # SGLang model deployments
+│   ├── llama-3.2-1b.yaml
+│   └── deploy-llama-3.2-1b.sh
+├── gateway/                   # API Gateway (supports both vLLM and SGLang)
+│   ├── api-gateway.py             # Gateway source code
+│   ├── api-gateway.yaml           # Gateway Pod/Service definitions
+│   ├── deploy-gateway.sh          # Gateway deployment script
+│   ├── access-gateway.sh          # Gateway access helper
+│   ├── ingress*.yaml              # Ingress configurations
+│   └── README.md                  # Gateway documentation
+├── README.md                  # Main setup guide
+└── TEST_GATEWAY.md            # Gateway testing guide
 ```
+
+**Note:** API Gateway files are in the `gateway/` directory as they are generic and support both vLLM and SGLang models.
 
 ## Additional Resources
 
-- Main README: `../README.md` - Complete setup guide from k3d to vLLM deployment
-- API Gateway: See main README step 9 for Gateway deployment and usage
+- **Main README**: `../README.md` - Complete setup guide from k3d cluster creation to vLLM deployment
+- **API Gateway**: `../gateway/README.md` - Gateway deployment, configuration, and usage
+- **Gateway Testing**: `../TEST_GATEWAY.md` - Comprehensive testing guide for the unified API Gateway
+- **SGLang Deployments**: `../sglang/` - SGLang model deployments (similar structure to vLLM)

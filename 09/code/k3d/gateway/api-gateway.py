@@ -8,6 +8,9 @@ from pydantic import BaseModel
 import httpx
 import json
 import logging
+import yaml
+import os
+from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List
 
 # 配置日志
@@ -25,18 +28,63 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Routing configuration (mutable for dynamic updates)
-# Format: {(model_name, inference_server): service_name}
-# inference_server can be "vllm", "sglang", etc.
-# If inference_server is None, it matches any inference server
-ROUTING_CONFIG: Dict[Tuple[str, Optional[str]], str] = {
-    # vLLM services
-    ("meta-llama/Llama-3.2-1B-Instruct", "vllm"): "vllm-llama-32-1b",
-    ("meta-llama/Llama-3.2-1B-Instruct", None): "vllm-llama-32-1b",  # Default to vLLM if not specified
+# Load routing configuration from YAML file
+def load_routing_config(config_path: str = "/app/routing-config.yaml") -> Dict[Tuple[str, Optional[str]], str]:
+    """
+    Load routing configuration from YAML file.
+    Falls back to default hardcoded config if file doesn't exist.
+    """
+    routing_config: Dict[Tuple[str, Optional[str]], str] = {}
     
-    # SGLang services
-    ("meta-llama/Llama-3.2-1B-Instruct", "sglang"): "sglang-llama-32-1b",
-}
+    try:
+        if os.path.exists(config_path):
+            logger.info(f"Loading routing configuration from {config_path}")
+            with open(config_path, 'r') as f:
+                config_data = yaml.safe_load(f)
+                
+            if config_data and "routing" in config_data:
+                for route in config_data["routing"]:
+                    model = route.get("model")
+                    inference_server = route.get("inference_server")
+                    service_name = route.get("service_name")
+                    
+                    if model and service_name:
+                        # Convert "null" string or None to None
+                        if inference_server == "null" or inference_server is None:
+                            inference_server = None
+                        else:
+                            inference_server = str(inference_server).lower()
+                        
+                        key = (model, inference_server)
+                        routing_config[key] = service_name
+                        logger.info(f"Loaded route: {model} (engine: {inference_server or 'default'}) -> {service_name}")
+                
+                logger.info(f"Successfully loaded {len(routing_config)} routing rules from config file")
+                return routing_config
+        else:
+            logger.warning(f"Routing config file not found at {config_path}, using default hardcoded config")
+    except Exception as e:
+        logger.error(f"Failed to load routing config from {config_path}: {e}, using default hardcoded config")
+    
+    # Fallback to default hardcoded configuration
+    logger.info("Using default hardcoded routing configuration")
+    return {
+        # vLLM services
+        ("meta-llama/Llama-3.2-1B-Instruct", "vllm"): "vllm-llama-32-1b",
+        ("meta-llama/Llama-3.2-1B-Instruct", None): "vllm-llama-32-1b",  # Default to vLLM if not specified
+        
+        # Phi-tiny-MoE (vLLM)
+        ("/models/Phi-tiny-MoE-instruct", "vllm"): "vllm-phi-tiny-moe-service",
+        ("/models/Phi-tiny-MoE-instruct", None): "vllm-phi-tiny-moe-service",  # Default to vLLM if not specified
+        ("Phi-tiny-MoE-instruct", "vllm"): "vllm-phi-tiny-moe-service",  # Also support without /models/ prefix
+        ("Phi-tiny-MoE-instruct", None): "vllm-phi-tiny-moe-service",
+        
+        # SGLang services
+        ("meta-llama/Llama-3.2-1B-Instruct", "sglang"): "sglang-llama-32-1b",
+    }
+
+# Routing configuration (loaded from file or using defaults)
+ROUTING_CONFIG: Dict[Tuple[str, Optional[str]], str] = load_routing_config()
 
 # Pydantic models for API
 class RoutingMapping(BaseModel):

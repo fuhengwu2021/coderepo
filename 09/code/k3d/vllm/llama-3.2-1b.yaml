@@ -33,7 +33,7 @@ spec:
     - --tensor-parallel-size
     - "1"
     - --gpu-memory-utilization
-    - "0.9"
+    - "0.2"  # Use 20% of GPU memory (reduced from 0.9 to allow multiple models)
     - --trust-remote-code
     env:
     - name: HF_HOME

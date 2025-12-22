@@ -1,0 +1,35 @@
+# API Gateway Routing Configuration
+# This file defines how requests are routed to different inference services
+# Format: model_name -> inference_server -> service_name
+
+routing:
+  # vLLM services
+  - model: "meta-llama/Llama-3.2-1B-Instruct"
+    inference_server: "vllm"
+    service_name: "vllm-llama-32-1b"
+  
+  - model: "meta-llama/Llama-3.2-1B-Instruct"
+    inference_server: null  # Default to vLLM if not specified
+    service_name: "vllm-llama-32-1b"
+  
+  # Phi-tiny-MoE (vLLM)
+  - model: "/models/Phi-tiny-MoE-instruct"
+    inference_server: "vllm"
+    service_name: "vllm-phi-tiny-moe-service"
+  
+  - model: "/models/Phi-tiny-MoE-instruct"
+    inference_server: null  # Default to vLLM if not specified
+    service_name: "vllm-phi-tiny-moe-service"
+  
+  - model: "Phi-tiny-MoE-instruct"  # Also support without /models/ prefix
+    inference_server: "vllm"
+    service_name: "vllm-phi-tiny-moe-service"
+  
+  - model: "Phi-tiny-MoE-instruct"
+    inference_server: null
+    service_name: "vllm-phi-tiny-moe-service"
+  
+  # SGLang services
+  - model: "meta-llama/Llama-3.2-1B-Instruct"
+    inference_server: "sglang"
+    service_name: "sglang-llama-32-1b"
