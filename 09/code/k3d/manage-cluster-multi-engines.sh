@@ -158,16 +158,17 @@ start_cluster() {
     echo "🚀 Checking and deploying LLM serving pods (multi-engine: vLLM + SGLang)..."
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     
-    # Deploy vLLM Llama-3.2-1B pod if it doesn't exist
-    if ! kubectl get pod vllm-llama-32-1b &>/dev/null; then
-        echo "  📦 Deploying vLLM Llama-3.2-1B pod..."
+    # Deploy vLLM Llama-3.2-1B deployment if it doesn't exist
+    # Note: vLLM now uses Deployment (vllm-llama-32-1b-pod), not direct Pod
+    if ! kubectl get deployment vllm-llama-32-1b-pod &>/dev/null; then
+        echo "  📦 Deploying vLLM Llama-3.2-1B deployment..."
         if [ -f "$SCRIPT_DIR/vllm/llama-3.2-1b.yaml" ]; then
-            kubectl apply -f "$SCRIPT_DIR/vllm/llama-3.2-1b.yaml" 2>/dev/null || echo "    ⚠️  Failed to deploy vLLM pod (may need HF_TOKEN secret)"
+            kubectl apply -f "$SCRIPT_DIR/vllm/llama-3.2-1b.yaml" 2>/dev/null || echo "    ⚠️  Failed to deploy vLLM deployment (may need HF_TOKEN secret)"
         else
             echo "    ⚠️  vLLM YAML file not found: $SCRIPT_DIR/vllm/llama-3.2-1b.yaml"
         fi
     else
-        echo "  ✅ vLLM Llama-3.2-1B pod already exists"
+        echo "  ✅ vLLM Llama-3.2-1B deployment already exists"
     fi
     
     # Deploy SGLang Llama-3.2-1B pod if it doesn't exist
