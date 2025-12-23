@@ -192,7 +192,33 @@ start_cluster() {
     # Clean up Pods in error states (UnexpectedAdmissionError, Failed, etc.)
     # This prevents multiple Pod instances when old error Pods aren't cleaned up
     echo "  🧹 Cleaning up Pods in error states..."
-    ERROR_PODS=$(kubectl get pods -n "$NAMESPACE" -o jsonpath='{range .items[?(@.status.phase=="Failed" || @.status.reason=="UnexpectedAdmissionError")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+    # Use Python to properly detect pods with UnexpectedAdmissionError in conditions
+    ERROR_PODS=$(kubectl get pods -n "$NAMESPACE" -o json 2>/dev/null | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+pods_to_delete = []
+for pod in data.get('items', []):
+    name = pod['metadata']['name']
+    phase = pod.get('status', {}).get('phase', '')
+    conditions = pod.get('status', {}).get('conditions', [])
+    
+    # Check for Failed phase
+    if phase == 'Failed':
+        pods_to_delete.append(name)
+        continue
+    
+    # Check for UnexpectedAdmissionError in PodScheduled condition
+    for condition in conditions:
+        if condition.get('type') == 'PodScheduled':
+            reason = condition.get('reason', '')
+            if reason == 'UnexpectedAdmissionError':
+                pods_to_delete.append(name)
+                break
+
+for pod_name in pods_to_delete:
+    print(pod_name)
+" || true)
+    
     if [ -n "$ERROR_PODS" ]; then
         echo "$ERROR_PODS" | while read -r pod; do
             if [ -n "$pod" ]; then

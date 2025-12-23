@@ -60,15 +60,15 @@ spec:
       httpGet:
         path: /health
         port: 8000
-      initialDelaySeconds: 60
-      periodSeconds: 3600
+      initialDelaySeconds: 180  # Wait 3 minutes for model loading
+      periodSeconds: 120  # Check every 120 seconds (2 minutes)
       timeoutSeconds: 5
     readinessProbe:
       httpGet:
         path: /health
         port: 8000
-      initialDelaySeconds: 60
-      periodSeconds: 1800
+      initialDelaySeconds: 120  # Wait 2 minutes for model loading
+      periodSeconds: 60  # Check every 60 seconds (1 minute)
       timeoutSeconds: 3
   volumes:
   - name: models

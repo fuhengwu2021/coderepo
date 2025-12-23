@@ -218,14 +218,14 @@ spec:
           httpGet:
             path: /health
             port: 8000
-          initialDelaySeconds: 10
-          periodSeconds: 3600
+          initialDelaySeconds: 30  # Wait 30 seconds for gateway startup
+          periodSeconds: 120  # Check every 120 seconds (2 minutes)
         readinessProbe:
           httpGet:
             path: /health
             port: 8000
-          initialDelaySeconds: 5
-          periodSeconds: 1800
+          initialDelaySeconds: 10  # Wait 10 seconds for gateway startup
+          periodSeconds: 60  # Check every 60 seconds (1 minute)
       volumes:
       - name: gateway-code
         configMap:
