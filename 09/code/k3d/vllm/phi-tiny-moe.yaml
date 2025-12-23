@@ -17,6 +17,7 @@ spec:
         app: vllm
         model: phi-tiny-moe
     spec:
+      terminationGracePeriodSeconds: 60  # Allow 60 seconds for graceful shutdown (LLM services need time to release GPU memory)
       # 部署到新的 agent 节点 k3d-agent-1-0-56098497
       nodeSelector:
         kubernetes.io/hostname: k3d-agent-1-0-56098497

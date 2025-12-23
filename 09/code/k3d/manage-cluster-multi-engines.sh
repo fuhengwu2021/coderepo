@@ -29,24 +29,34 @@ show_usage() {
     exit 1
 }
 
-# Function to stop cluster
+# Function to stop namespace resources (does NOT stop the cluster)
 stop_cluster() {
     echo "=========================================="
-    echo "Stopping k3d Cluster: $CLUSTER_NAME"
+    echo "Stopping resources in namespace: $NAMESPACE"
     echo "=========================================="
     echo ""
+    echo "⚠️  Note: This will only delete resources in '$NAMESPACE' namespace."
+    echo "   The cluster itself will remain running (other namespaces are unaffected)."
+    echo ""
     
+    # Check if cluster is running
     if ! k3d cluster list | grep -q "$CLUSTER_NAME"; then
         echo "⚠️  Cluster $CLUSTER_NAME not found"
         exit 1
     fi
     
-    # Stop port-forward processes before stopping cluster
-    # This prevents orphaned processes when cluster stops
+    # Check if cluster is actually running
+    if ! kubectl cluster-info &>/dev/null; then
+        echo "⚠️  Cluster is not accessible. Please start the cluster first:"
+        echo "   k3d cluster start $CLUSTER_NAME"
+        exit 1
+    fi
+    
+    # Stop port-forward processes for this namespace
     echo "Checking for active port-forward processes..."
-    PF_PIDS=$(pgrep -f "kubectl port-forward" 2>/dev/null || true)
+    PF_PIDS=$(pgrep -f "kubectl port-forward.*$NAMESPACE" 2>/dev/null || true)
     if [ -n "$PF_PIDS" ]; then
-        echo "  Found port-forward processes, stopping them..."
+        echo "  Found port-forward processes for namespace '$NAMESPACE', stopping them..."
         for pid in $PF_PIDS; do
             # Get the command line to show what we're stopping
             PF_CMD=$(ps -p $pid -o args= 2>/dev/null | head -1 || echo "unknown")
@@ -63,29 +73,11 @@ stop_cluster() {
         done
         echo "  ✅ Port-forward processes stopped"
     else
-        echo "  No port-forward processes found"
+        echo "  No port-forward processes found for namespace '$NAMESPACE'"
     fi
     echo ""
     
-    echo "Stopping cluster..."
-    k3d cluster stop "$CLUSTER_NAME"
-    
-    # Also stop manually created agent nodes (created via docker run)
-    echo ""
-    echo "Stopping manually created agent nodes..."
-    MANUAL_AGENTS=$(docker ps -a --filter "label=k3d.cluster=$CLUSTER_NAME" --filter "label=k3d.role=agent" --format "{{.Names}}" | grep -v "^k3d-$CLUSTER_NAME" || true)
-    if [ -n "$MANUAL_AGENTS" ]; then
-        for agent in $MANUAL_AGENTS; do
-            if docker ps --format "{{.Names}}" | grep -q "^${agent}$"; then
-                echo "  Stopping $agent..."
-                docker stop "$agent" 2>/dev/null || true
-            fi
-        done
-    fi
-    
-    # Clean up namespace resources when stopping (for this script's namespace)
-    # This ensures a clean state when cluster is stopped
-    echo ""
+    # Clean up namespace resources (does NOT stop the cluster)
     echo "🧹 Cleaning up resources in namespace '$NAMESPACE'..."
     if kubectl get namespace "$NAMESPACE" &>/dev/null; then
         kubectl delete deployments,svc -n "$NAMESPACE" --all 2>/dev/null || echo "    ⚠️  Failed to delete some resources (may not exist)"
@@ -95,10 +87,13 @@ stop_cluster() {
     fi
     
     echo ""
-    echo "✅ Cluster stopped"
+    echo "✅ Resources in namespace '$NAMESPACE' stopped"
     echo ""
-    echo "📊 Cluster status:"
-    k3d cluster list
+    echo "📊 Remaining resources in namespace '$NAMESPACE':"
+    kubectl get all -n "$NAMESPACE" 2>/dev/null || echo "  (namespace is empty or does not exist)"
+    echo ""
+    echo "💡 The cluster is still running. Other namespaces are unaffected."
+    echo "   To stop the entire cluster, use: k3d cluster stop $CLUSTER_NAME"
     echo ""
     echo "📊 Docker containers status:"
     docker ps -a --filter "name=k3d-$CLUSTER_NAME" --filter "label=k3d.cluster=$CLUSTER_NAME" --format "table {{.Names}}\t{{.Status}}"

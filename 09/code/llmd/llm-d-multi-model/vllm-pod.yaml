@@ -15,6 +15,7 @@ metadata:
     model: llama-32-1b
     server: vllm
 spec:
+  terminationGracePeriodSeconds: 60  # Allow 60 seconds for graceful shutdown (LLM services need time to release GPU memory)
   runtimeClassName: nvidia
   containers:
   - name: vllm-server
