@@ -42,8 +42,7 @@ k3d --version
 
 ```bash
 # Build custom k3s image with CUDA support
-docker build -t k3s-cuda:v1.33.6-cuda-12.2.0 \
-  -f - <<EOF
+docker build -t k3s-cuda:v1.33.6-cuda-12.2.0 -f - <<EOF
 FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
 RUN apt-get update && apt-get install -y curl
 RUN curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v1.33.6 sh -
@@ -59,9 +58,7 @@ EOF
 # Create cluster with GPU support and volume mounts
 k3d cluster create mycluster-gpu \
   --image k3s-cuda:v1.33.6-cuda-12.2.0-working \
-  --gpus=all \
-  --servers 1 \
-  --agents 1 \
+  --gpus=all --servers 1 --agents 3 \
   --volume /raid/models:/models
 
 # Merge kubeconfig
@@ -75,20 +72,29 @@ kubectl get nodes
 
 If you need to run multiple models on different nodes for isolation, you can add more agent nodes. For example, the new node is named as `agent-1`.
 
+**⚠️ k3d Limitation:** `k3d node create` does not support the `--gpus` flag (unlike `k3d cluster create` which does). This is a [known limitation of k3d](https://github.com/k3d-io/k3d/issues). Therefore, we need a workaround:
+1. Create the node with `k3d node create` (to get proper networking and k3d labels)
+2. Stop and remove the container
+3. Manually recreate it with `docker run --gpus all` to add GPU support
+
+**Step-by-step instructions:**
+
 ```bash
-# Add a new agent node (k3d node create doesn't support --gpus directly)
-# First create the node
+# Step 1: Create node with k3d (without GPU support - this is the limitation)
 k3d node create agent-1 --cluster mycluster-gpu --role agent
 
-# Then manually reconfigure the container to add GPU support
-# Stop and remove the container
+# Step 2: Stop and remove the container (k3d created it without --gpus)
 docker stop k3d-agent-1-0
 docker rm k3d-agent-1-0
 
-# Recreate with GPU and volume support
-# Get the image ID first
+# Step 3: Get required values
+# Get the image ID
 IMAGE_ID=$(docker images k3s-cuda:v1.33.6-cuda-12.2.0-working --format "{{.ID}}")
 
+# Get K3S_TOKEN from the server (required for agent to join cluster)
+K3S_TOKEN=$(docker exec k3d-mycluster-gpu-server-0 cat /var/lib/rancher/k3s/server/node-token)
+
+# Step 4: Recreate container with GPU support
 docker run -d \
   --name k3d-agent-1-0 \
   --hostname k3d-agent-1-0 \
@@ -96,7 +102,7 @@ docker run -d \
   --privileged \
   --tmpfs /run \
   --tmpfs /var/run \
-  -e K3S_TOKEN=LmYHFPGciNataclGfjAI \
+  -e K3S_TOKEN="$K3S_TOKEN" \
   -e K3S_URL=https://k3d-mycluster-gpu-server-0:6443 \
   -e K3S_KUBECONFIG_OUTPUT=/output/kubeconfig.yaml \
   -v /raid/models:/models \
@@ -108,12 +114,15 @@ docker run -d \
   $IMAGE_ID \
   agent --with-node-id
 
-# Wait for node to be ready and GPU to be detected
-kubectl get nodes -w
-# Wait ~20-30 seconds for device plugin to detect GPU
-# Note: Node name will have a suffix (e.g., k3d-agent-1-0-56098497) due to --with-node-id
+# Step 5: Wait for node to be ready and verify GPU
+# Wait ~20-30 seconds for the node to join and device plugin to detect GPU
+sleep 30
+kubectl get nodes
+
+# Check GPU capacity (node name will have a suffix due to --with-node-id)
 NEW_NODE=$(kubectl get nodes -o json | jq -r '.items[] | select(.metadata.name | startswith("k3d-agent-1-0")) | .metadata.name' | head -1)
-kubectl get nodes $NEW_NODE -o json | jq -r '.status.capacity."nvidia.com/gpu"'
+echo "Node name: $NEW_NODE"
+kubectl get node $NEW_NODE -o json | jq -r '.status.capacity."nvidia.com/gpu"'
 ```
 
 ```
@@ -167,6 +176,26 @@ kubectl patch deployment local-path-provisioner -n kube-system --type json -p '[
 # Restart local-path-provisioner
 kubectl rollout restart deployment local-path-provisioner -n kube-system
 ```
+
+**Explanation:**
+
+By default, k3d's `local-path-provisioner` stores PersistentVolume data in `/var/lib/rancher/k3s/storage` inside each container, which is ephemeral and lost when containers restart. For LLM workloads that need persistent storage (model caches, checkpoints, etc.), we configure it to use `/raid/tmpdata` on the host instead.
+
+**What this configuration does:**
+
+1. **ConfigMap patch**: Changes the default storage path from the container's internal path to `/raid/tmpdata/k3s-storage` on the host. This ensures data persists across container restarts.
+
+2. **Volume mount**: Adds a hostPath volume mount to the `local-path-provisioner` pod so it can access `/raid/tmpdata` on the host. Without this, the provisioner can't create directories in the host filesystem.
+
+3. **Restart**: Restarts the provisioner to apply the new configuration.
+
+**Why this is needed:**
+
+- **Persistence**: Model caches and checkpoints stored in PersistentVolumes will survive container restarts
+- **Performance**: Using `/raid/tmpdata` (typically on faster storage like RAID) instead of container filesystem improves I/O performance
+- **Capacity**: Host storage typically has more space than container filesystems
+
+**Note**: Make sure `/raid/tmpdata` exists on your host and has sufficient space for your workloads.
 
 ### 6. Set Up HuggingFace Token (for Gated Models)
 
