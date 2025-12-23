@@ -254,6 +254,19 @@ for pod_name in pods_to_delete:
         echo "  ✅ SGLang Llama-3.2-1B deployment already exists"
     fi
     
+    # Deploy TensorRT-LLM Llama-3.2-1B deployment if it doesn't exist (optional)
+    # Note: TensorRT-LLM uses Deployment (tensorrt-llama-32-1b-pod)
+    if ! kubectl get deployment tensorrt-llama-32-1b-pod -n "$NAMESPACE" &>/dev/null; then
+        echo "  📦 Deploying TensorRT-LLM Llama-3.2-1B deployment (optional)..."
+        if [ -f "$SCRIPT_DIR/tensorrt/llama-3.2-1b.yaml" ]; then
+            kubectl apply -f "$SCRIPT_DIR/tensorrt/llama-3.2-1b.yaml" -n "$NAMESPACE" 2>/dev/null || echo "    ⚠️  Failed to deploy TensorRT deployment (may need HF_TOKEN secret or TensorRT-LLM model)"
+        else
+            echo "    ℹ️  TensorRT YAML file not found: $SCRIPT_DIR/tensorrt/llama-3.2-1b.yaml (optional, skipping)"
+        fi
+    else
+        echo "  ✅ TensorRT-LLM Llama-3.2-1B deployment already exists"
+    fi
+    
     echo ""
     echo "✅ Cluster started"
     echo ""

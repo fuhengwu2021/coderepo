@@ -73,14 +73,12 @@ kubectl get nodes
 
 ### 4. Add Additional Agent Node (Optional)
 
-If you need to run multiple models on different nodes for isolation, you can add more agent nodes:
+If you need to run multiple models on different nodes for isolation, you can add more agent nodes. For example, the new node is named as `agent-1`.
 
 ```bash
 # Add a new agent node (k3d node create doesn't support --gpus directly)
 # First create the node
-k3d node create agent-1 \
-  --cluster mycluster-gpu \
-  --role agent
+k3d node create agent-1 --cluster mycluster-gpu --role agent
 
 # Then manually reconfigure the container to add GPU support
 # Stop and remove the container
@@ -102,7 +100,7 @@ docker run -d \
   -e K3S_URL=https://k3d-mycluster-gpu-server-0:6443 \
   -e K3S_KUBECONFIG_OUTPUT=/output/kubeconfig.yaml \
   -v /raid/models:/models \
-  -v /home/fuhwu/workspace/distributedai/resources/vllm:/vllm \
+  -v /raid/tmpdata/vllm:/vllm \
   --label k3d.cluster=mycluster-gpu \
   --label k3d.role=agent \
   --gpus all \

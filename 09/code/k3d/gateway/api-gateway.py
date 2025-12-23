@@ -82,6 +82,10 @@ def load_routing_config(config_path: str = "/app/routing-config.yaml") -> Dict[T
         
         # SGLang services (multi-engines namespace)
         ("meta-llama/Llama-3.2-1B-Instruct", "sglang"): "sglang-llama-32-1b-service.multi-engines.svc.cluster.local",
+        
+        # TensorRT-LLM services (multi-engines namespace)
+        ("meta-llama/Llama-3.2-1B-Instruct", "tensorrt"): "tensorrt-llama-32-1b-service.multi-engines.svc.cluster.local",
+        ("meta-llama/Llama-3.2-1B-Instruct", "trtllm"): "tensorrt-llama-32-1b-service.multi-engines.svc.cluster.local",
     }
 
 # Routing configuration (loaded from file or using defaults)
@@ -287,6 +291,8 @@ async def list_models():
                                 if owned_by == "default" or owned_by == "unknown":
                                     if "sglang" in service_name.lower():
                                         owned_by = "sglang"
+                                    elif "tensorrt" in service_name.lower() or "trtllm" in service_name.lower():
+                                        owned_by = "tensorrt"
                                     elif "vllm" in service_name.lower():
                                         owned_by = "vllm"
                                 
@@ -325,6 +331,8 @@ async def list_models():
                     engine = inference_server
                 elif "sglang" in service_name.lower():
                     engine = "sglang"
+                elif "tensorrt" in service_name.lower() or "trtllm" in service_name.lower():
+                    engine = "tensorrt"
                 elif "vllm" in service_name.lower():
                     engine = "vllm"
                 else:
