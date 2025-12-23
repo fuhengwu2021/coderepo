@@ -83,6 +83,17 @@ stop_cluster() {
         done
     fi
     
+    # Clean up namespace resources when stopping (for this script's namespace)
+    # This ensures a clean state when cluster is stopped
+    echo ""
+    echo "🧹 Cleaning up resources in namespace '$NAMESPACE'..."
+    if kubectl get namespace "$NAMESPACE" &>/dev/null; then
+        kubectl delete deployments,svc -n "$NAMESPACE" --all 2>/dev/null || echo "    ⚠️  Failed to delete some resources (may not exist)"
+        echo "  ✅ Resources in namespace '$NAMESPACE' deleted"
+    else
+        echo "  ℹ️  Namespace '$NAMESPACE' does not exist, nothing to clean up"
+    fi
+    
     echo ""
     echo "✅ Cluster stopped"
     echo ""
@@ -179,6 +190,22 @@ start_cluster() {
     echo ""
     echo "🚀 Checking and deploying LLM serving pods (multi-engine: vLLM + SGLang) in namespace: $NAMESPACE..."
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    
+    # Clean up Pods in error states (UnexpectedAdmissionError, Failed, etc.)
+    # This prevents multiple Pod instances when old error Pods aren't cleaned up
+    echo "  🧹 Cleaning up Pods in error states..."
+    ERROR_PODS=$(kubectl get pods -n "$NAMESPACE" -o jsonpath='{range .items[?(@.status.phase=="Failed" || @.status.reason=="UnexpectedAdmissionError")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+    if [ -n "$ERROR_PODS" ]; then
+        echo "$ERROR_PODS" | while read -r pod; do
+            if [ -n "$pod" ]; then
+                echo "    🗑️  Deleting error Pod: $pod"
+                kubectl delete pod "$pod" -n "$NAMESPACE" --grace-period=0 --force 2>/dev/null || true
+            fi
+        done
+        sleep 2  # Wait for Pods to be deleted
+    else
+        echo "    ✅ No error Pods found"
+    fi
     
     # Deploy vLLM Llama-3.2-1B deployment if it doesn't exist
     # Note: vLLM now uses Deployment (vllm-llama-32-1b-pod), not direct Pod
