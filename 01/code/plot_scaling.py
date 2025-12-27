@@ -15,10 +15,10 @@ speedup = times[0] / times
 fig, ax1 = plt.subplots(1, 1, figsize=(6, 3.25))
 
 # Plot: Training time vs number of GPUs
-ax1.plot(gpus, times, 'o-', linewidth=2, markersize=8, color='#2E86AB')
-ax1.set_xlabel('Number of GPUs', fontsize=10)
-ax1.set_ylabel('Training Time (seconds)', fontsize=10)
-ax1.set_title('FashionMNIST Training Time vs Number of GPUs', fontsize=12, pad=15)
+ax1.plot(gpus, times, 'o-', linewidth=1, markersize=8, color='#2E86AB')
+ax1.set_xlabel('Number of GPUs', fontsize=8)
+ax1.set_ylabel('Training Time (seconds)', fontsize=8)
+ax1.set_title('FashionMNIST Training Time vs Number of GPUs', fontsize=9, pad=5)
 ax1.grid(True, alpha=0.3)
 ax1.set_xticks(gpus)
 

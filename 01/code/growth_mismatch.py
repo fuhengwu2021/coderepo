@@ -34,7 +34,7 @@ gpu_data = [
 
 def create_growth_mismatch_plot():
     """Create a two-subplot figure showing exponential vs linear growth."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 6))
     
     # Subplot 1: Model Parameters (Exponential Growth)
     years_models = [row[0] for row in model_data]

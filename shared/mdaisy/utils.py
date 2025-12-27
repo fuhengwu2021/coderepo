@@ -248,3 +248,29 @@ def get_resnet18_fashionmnist(num_classes=10):
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     return model
 
+
+def get_resnet18_cifar10(num_classes=10):
+    """
+    Get ResNet18 model adapted for 3-channel CIFAR-10 input.
+    
+    This function creates a ResNet18 model from torchvision and modifies it
+    to work with CIFAR-10's 32×32 RGB images. Unlike FashionMNIST, CIFAR-10
+    already has 3 channels, but the images are smaller (32×32 vs 224×224),
+    so we adjust the first convolutional layer and remove the maxpool layer.
+    
+    Args:
+        num_classes: Number of output classes (default: 10 for CIFAR-10)
+    
+    Returns:
+        torch.nn.Module: ResNet18 model adapted for CIFAR-10
+    """
+    model = models.resnet18(weights=None)  # Use pretrained=False for random init
+    # CIFAR-10 has 3 channels, but images are 32×32, so we adjust the first conv layer
+    # Use smaller kernel and stride to preserve spatial dimensions
+    model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+    # Remove the first maxpool since CIFAR-10 images are already small (32×32)
+    model.maxpool = nn.Identity()
+    # Modify last fully connected layer for specified number of classes
+    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    return model
+

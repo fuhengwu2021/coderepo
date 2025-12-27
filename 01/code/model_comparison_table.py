@@ -83,7 +83,7 @@ def format_parameter_label(param_value):
 
 def create_model_comparison_plot():
     """Create a scatter plot with Year on X-axis and Parameters on Y-axis."""
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 9))
     
     years = []
     parameters = []

@@ -40,7 +40,7 @@ def train_single_gpu():
         correct = 0
         total = 0
         
-        for batch_idx, (data, target) in enumerate(train_loader):
+        for _, (data, target) in enumerate(train_loader):
             data, target = data.to(device), target.to(device)
             
             optimizer.zero_grad()

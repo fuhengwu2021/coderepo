@@ -17,21 +17,9 @@ import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, transforms
+from mdaisy import get_resnet18_cifar10
 import os
 import time
-
-def get_resnet18_cifar10(num_classes=10):
-    """Get ResNet18 model adapted for 3-channel CIFAR-10 input"""
-    from torchvision import models
-    model = models.resnet18(weights=None)
-    # CIFAR-10 has 3 channels, so we don't need to modify conv1
-    # But CIFAR-10 images are 32x32, so we adjust the first conv layer
-    model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-    # Remove the first maxpool since CIFAR-10 images are already small
-    model.maxpool = nn.Identity()
-    # Modify last fully connected layer for 10 classes
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
-    return model
 
 def setup():
     """Initialize the process group using torchrun environment variables"""
