@@ -1,0 +1,88 @@
+# SGLang LLMInferenceService for Llama-3.2-1B-Instruct
+# Using llm-d Custom Resource Definition
+apiVersion: llm-d.ai/v1alpha1
+kind: LLMInferenceService
+metadata:
+  name: sglang-llama-32-1b
+  labels:
+    app: sglang
+    model: llama-32-1b
+spec:
+  # Model configuration
+  model:
+    name: meta-llama/Llama-3.2-1B-Instruct
+    path: meta-llama/Llama-3.2-1B-Instruct
+  
+  # Inference server configuration
+  inferenceServer:
+    type: sglang
+    image: lmsysorg/sglang:v0.5.6.post2-runtime
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+    args:
+      - --model-path
+      - meta-llama/Llama-3.2-1B-Instruct
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --trust-remote-code
+  
+  # Resource requirements
+  resources:
+    requests:
+      nvidia.com/gpu: 1
+      memory: 6Gi
+    limits:
+      nvidia.com/gpu: 1
+      memory: 8Gi
+  
+  # Environment variables
+  env:
+    - name: HF_HOME
+      value: "/models/hub"
+    - name: TRANSFORMERS_CACHE
+      value: "/models/hub"
+    - name: HF_HUB_CACHE
+      value: "/models/hub"
+    - name: HF_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: hf-token-secret
+          key: token
+  
+  # Volume mounts
+  volumes:
+    - name: models
+      hostPath:
+        path: /models
+        type: Directory
+  volumeMounts:
+    - name: models
+      mountPath: /models
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8000
+  
+  # Health checks
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 180  # Wait 3 minutes for model loading
+    periodSeconds: 120  # Check every 120 seconds (2 minutes)
+    timeoutSeconds: 5
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 120  # Wait 2 minutes for model loading
+    periodSeconds: 60  # Check every 60 seconds (1 minute)
+    timeoutSeconds: 3
+  
+  # Runtime class for GPU support
+  runtimeClassName: nvidia

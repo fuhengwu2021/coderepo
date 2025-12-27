@@ -1,0 +1,143 @@
+# ConfigMap for API Gateway code
+# This ConfigMap should be created from api-gateway.py file using:
+#   ./update-configmap.sh
+# Or manually:
+#   kubectl create configmap llmd-api-gateway-code \
+#     --from-file=api-gateway.py=api-gateway.py \
+#     --namespace=llm-d-multi-model \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+# The ConfigMap is referenced by the Deployment below.
+# DO NOT embed Python code directly in this YAML file.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llmd-api-gateway-code
+  namespace: llm-d-multi-model
+  annotations:
+    note: "This ConfigMap is generated from api-gateway.py. Run ./update-configmap.sh to update."
+# Note: The 'data' section is intentionally empty here.
+# The actual api-gateway.py content is populated by running:
+#   ./update-configmap.sh
+# This keeps the YAML file clean and maintainable.
+# The ConfigMap will be created/updated with the actual file content.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmd-api-gateway
+  namespace: llm-d-multi-model
+  labels:
+    app: llmd-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llmd-gateway
+  template:
+    metadata:
+      labels:
+        app: llmd-gateway
+    spec:
+      # Deploy to agent nodes, avoid control-plane
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: DoesNotExist
+      tolerations:
+        - operator: "Exists"
+      serviceAccountName: llmd-api-gateway
+      containers:
+      - name: gateway
+        image: python:3.11-slim
+        command:
+        - /bin/bash
+        - -c
+        - |
+          pip install fastapi uvicorn httpx kubernetes -q
+          python /app/api-gateway.py
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: gateway-code
+          mountPath: /app
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30  # Wait 30 seconds for gateway startup
+          periodSeconds: 120  # Check every 120 seconds (2 minutes)
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10  # Wait 10 seconds for gateway startup
+          periodSeconds: 60  # Check every 60 seconds (1 minute)
+      volumes:
+      - name: gateway-code
+        configMap:
+          name: llmd-api-gateway-code
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llmd-api-gateway
+  namespace: llm-d-multi-model
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: llmd-api-gateway
+  namespace: llm-d-multi-model
+rules:
+- apiGroups: [""]
+  resources: ["services", "pods", "endpoints"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: llmd-api-gateway
+  namespace: llm-d-multi-model
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: llmd-api-gateway
+subjects:
+- kind: ServiceAccount
+  name: llmd-api-gateway
+  namespace: llm-d-multi-model
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llmd-api-gateway
+  namespace: llm-d-multi-model
+  labels:
+    app: llmd-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: llmd-gateway
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http

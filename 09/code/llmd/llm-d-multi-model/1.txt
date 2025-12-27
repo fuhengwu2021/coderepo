@@ -1,0 +1,58 @@
+k3d cluster create llmd-cluster   --image k3s-cuda:v1.33.6-cuda-12.2.0-working   --gpus=all   --servers 1   --agents 1   --volume /raid/models:/models   --k3s-arg '--disable=traefik@server:0'   --port "8080:80@loadbalancer"   --port "8443:443@loadbalancer"
+kubectl get ns
+kubectl get pods
+k3d kubeconfig merge llmd-cluster --kubeconfig-merge-default
+kubectl config use-context k3d-llmd-cluster
+kubectl get nodes
+# 这会自动检查并删除旧集群
+k3d cluster list | grep llmd-cluster && k3d cluster delete llmd-cluster
+# 然后创建新集群（按照文档中的完整命令）
+kubectl cluster-info
+vi ~/.kube/config
+cat ~/.kube/config
+helmfile apply -f istio.helmfile.yaml
+cd ${LLMD_HOME}/guides/inference-scheduling
+# Deploy first model with custom release name
+RELEASE_NAME_POSTFIX=llama-3.2-1b helmfile apply -n ${NAMESPACE}   --set-file ms-llama-3.2-1b.values[0]=${LLMD_CONFIG_DIR}/llama-3.2-1b-values.yaml
+cd ${LLMD_HOME}/guides/inference-scheduling
+# Create directory and copy custom values file
+# Note: helmfile expects ms-inference-scheduling/values.yaml, so we'll use that path
+mkdir -p ms-inference-scheduling
+cp ${LLMD_CONFIG_DIR}/llama-3.2-1b-values.yaml ms-inference-scheduling/values.yaml
+# Deploy first model with custom release name
+RELEASE_NAME_POSTFIX=llama-3.2-1b helmfile apply -n ${NAMESPACE}
+kubectl get nodes
+kubectl get pods
+kubectl get ns
+kubectl get pods
+export NAMESPACE=llm-d-multi-model && kubectl get pods -n ${NAMESPACE} -o wide
+export NAMESPACE=llm-d-multi-model && kubectl get pods -n ${NAMESPACE}
+ll /raid/models
+export NAMESPACE=llm-d-multi-model && kubectl get pods -n ${NAMESPACE}
+nvidia-smi
+curl http://localhost:8000/v1/models
+curl http://localhost:8000/v1/models |jq
+ll /raid/models/
+ll /raid/models/Phi-tiny-MoE-instruct/
+ll /raid/models/hub
+#sudo chmod 777 /raid/models/hub
+sudo chmod -R 775 /raid/models/hub
+docker ps -a
+df -h
+kubectl get pods
+export NAMESPACE=llm-d-multi-model && kubectl get pods -n ${NAMESPACE} -o wide
+export NAMESPACE=llm-d-multi-model && kubectl get pod -n ${NAMESPACE} -l llm-d.ai/role=decode
+export NAMESPACE=llm-d-multi-model && kubectl get pods -n ${NAMESPACE} -l llm-d.ai/role=decode
+export NAMESPACE=llm-d-multi-model
+# Option 1: Port-forward directly to ModelService pod (recommended for testing)
+POD_NAME=$(kubectl get pods -n ${NAMESPACE} -l llm-d.ai/role=decode | grep llama-32-1b | awk '{print $1}')
+kubectl port-forward -n ${NAMESPACE} pod/${POD_NAME} 8002:8000
+# Get Gateway service ClusterIP
+export NAMESPACE=llm-d-multi-model
+GATEWAY_IP=$(kubectl get svc -n ${NAMESPACE} infra-llama-32-1b-inference-gateway-istio -o jsonpath='{.spec.clusterIP}')
+echo "Gateway IP: ${GATEWAY_IP}"
+# List Available Models (from within cluster)
+curl http://${GATEWAY_IP}/v1/models
+curl http://localhost:8003/v1/models
+cd /home/fuhwu/workspace/coderepo/extra
+gss

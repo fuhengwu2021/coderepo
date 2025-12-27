@@ -1,0 +1,103 @@
+# vLLM Serving for Llama-4-Scout-17B-16E-Instruct
+# Configuration for 8x H200 with 2M context length (2097152 tokens)
+# Model path: /mnt/co-research/shared-models/hub/models--meta-llama--Llama-4-Scout-17B-16E-Instruct
+
+---
+# Secret needs to be created from environment variable, do not hardcode token
+# Create command: kubectl create secret generic hf-token-secret --from-literal=token="$HF_TOKEN"
+# Or: kubectl create secret generic hf-token-secret --from-env-file=<(echo "token=$HF_TOKEN")
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-llama-4-scout
+  labels:
+    app: vllm
+    model: llama-4-scout
+spec:
+  runtimeClassName: nvidia
+  containers:
+  - name: vllm-server
+    image: vllm/vllm-openai:v0.12.0
+    command:
+    - python3
+    - -m
+    - vllm.entrypoints.openai.api_server
+    args:
+    - --model
+    - /mnt/co-research/shared-models/hub/models--meta-llama--Llama-4-Scout-17B-16E-Instruct/snapshots/4bd10c4dc905b4000d76640d07a552344146faec
+    - --host
+    - "0.0.0.0"
+    - --port
+    - "8000"
+    - --tensor-parallel-size
+    - "8"
+    - --max-model-len
+    - "2097152"
+    - --gpu-memory-utilization
+    - "0.9"
+    - --trust-remote-code
+    env:
+    - name: HF_HOME
+      value: "/mnt/co-research/shared-models/hub"
+    - name: TRANSFORMERS_CACHE
+      value: "/mnt/co-research/shared-models/hub"
+    - name: HF_HUB_CACHE
+      value: "/mnt/co-research/shared-models/hub"
+    - name: HF_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: hf-token-secret
+          key: token
+    ports:
+    - containerPort: 8000
+      name: http
+    resources:
+      limits:
+        nvidia.com/gpu: 8
+        memory: 128Gi
+      requests:
+        nvidia.com/gpu: 8
+        memory: 96Gi
+    volumeMounts:
+    - name: models
+      mountPath: /mnt/co-research/shared-models
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      initialDelaySeconds: 120
+      periodSeconds: 30
+      timeoutSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      initialDelaySeconds: 120
+      periodSeconds: 3600
+      timeoutSeconds: 5
+  volumes:
+  - name: models
+    hostPath:
+      path: /mnt/co-research/shared-models
+      type: Directory
+  restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-llama-4-scout
+  labels:
+    app: vllm
+    model: llama-4-scout
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm
+    model: llama-4-scout
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
