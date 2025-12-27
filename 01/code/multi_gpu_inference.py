@@ -14,23 +14,11 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, transforms
 import os
 import time
-from mdaisy import get_resnet18_fashionmnist
-
-def setup():
-    """Initialize the process group"""
-    local_rank = int(os.environ.get('LOCAL_RANK', 0))
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
-    return rank, dist.get_world_size(), local_rank
-
-def cleanup():
-    """Clean up the process group"""
-    dist.destroy_process_group()
+from mdaisy import get_resnet18_fashionmnist, setup_distributed, cleanup_distributed
 
 def benchmark_distributed_inference(num_requests=1000, batch_size=1):
     """Benchmark distributed inference across multiple GPUs"""
-    rank, world_size, local_rank = setup()
+    rank, world_size, local_rank = setup_distributed()
     
     # Each GPU loads its own model copy
     model = get_resnet18_fashionmnist(num_classes=10).cuda()
@@ -92,7 +80,7 @@ def benchmark_distributed_inference(num_requests=1000, batch_size=1):
         print(f"Time to finish {total_requests} requests: {total_time:.2f}s")
         print(f"Throughput: {throughput:.2f} requests/second")
     
-    cleanup()
+    cleanup_distributed()
     return throughput, total_time
 
 if __name__ == "__main__":

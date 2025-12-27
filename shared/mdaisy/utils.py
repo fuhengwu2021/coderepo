@@ -274,3 +274,38 @@ def get_resnet18_cifar10(num_classes=10):
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     return model
 
+
+def setup_distributed():
+    """
+    Initialize the process group using torchrun environment variables.
+    
+    This is a simple setup function for basic DDP training with torchrun.
+    It reads environment variables set by torchrun and initializes the
+    distributed process group with NCCL backend.
+    
+    For more advanced use cases (CPU fallback, multi-node, etc.), use
+    init_distributed() instead.
+    
+    Returns:
+        tuple: (rank, world_size, local_rank)
+            - rank: Global rank of the process (across all nodes)
+            - world_size: Total number of processes (across all nodes)
+            - local_rank: Local rank on the current node
+    """
+    # torchrun sets these environment variables automatically
+    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    torch.cuda.set_device(local_rank)
+    dist.init_process_group("nccl")
+    rank = dist.get_rank()
+    return rank, dist.get_world_size(), local_rank
+
+
+def cleanup_distributed():
+    """
+    Clean up the distributed process group.
+    
+    Call this at the end of your distributed training/inference code to
+    properly clean up resources.
+    """
+    dist.destroy_process_group()
+

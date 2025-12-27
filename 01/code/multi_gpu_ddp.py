@@ -20,24 +20,11 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, transforms
 import os
 import time
-from mdaisy import get_resnet18_fashionmnist
-
-def setup():
-    """Initialize the process group using torchrun environment variables"""
-    # torchrun sets these environment variables automatically
-    local_rank = int(os.environ.get('LOCAL_RANK', 0))
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
-    return rank, dist.get_world_size(), local_rank
-
-def cleanup():
-    """Clean up the process group"""
-    dist.destroy_process_group()
+from mdaisy import get_resnet18_fashionmnist, setup_distributed, cleanup_distributed
 
 def train_ddp():
     """Run distributed training using PyTorch DDP"""
-    rank, world_size, local_rank = setup()
+    rank, world_size, local_rank = setup_distributed()
     
     # Data loading with distributed sampler
     transform = transforms.Compose([
@@ -107,7 +94,7 @@ def train_ddp():
     if rank == 0:
         print(f"\nTotal training time: {total_time:.2f}s")
     
-    cleanup()
+    cleanup_distributed()
 
 if __name__ == "__main__":
     train_ddp()

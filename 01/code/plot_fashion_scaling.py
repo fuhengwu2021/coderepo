@@ -1,14 +1,14 @@
 """
-Plot training time vs number of GPUs for CIFAR-10 extended training.
+Plot training time vs number of GPUs to show scaling efficiency.
 """
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 from pathlib import Path
 
-# Data from CIFAR-10 experiments (20 epochs)
+# Data from experiments
 gpus = np.array([1, 2, 4, 6, 8])
-times = np.array([73.00, 46.47, 27.72, 21.24, 18.20])  # in seconds
+times = np.array([8.78, 5.91, 3.69, 2.92, 2.44])
 
 # Calculate speedup
 speedup = times[0] / times
@@ -20,7 +20,7 @@ fig, ax1 = plt.subplots(1, 1, figsize=(6, 3.25))
 ax1.plot(gpus, times, 'o-', linewidth=1, markersize=4, color='#2E86AB')
 ax1.set_xlabel('Number of GPUs', fontsize=8)
 ax1.set_ylabel('Training Time (seconds)', fontsize=8)
-ax1.set_title('CIFAR-10 Training Time vs Number of GPUs\n(20 epochs, ResNet18)', fontsize=9, pad=5)
+ax1.set_title('FashionMNIST Training Time vs Number of GPUs', fontsize=9, pad=5)
 ax1.grid(True, alpha=0.3)
 ax1.set_xticks(gpus)
 
@@ -45,6 +45,6 @@ else:
     output_dir = script_dir_resolved
 
 plt.tight_layout(pad=2.0)
-output_path = output_dir / 'cifar10_scaling_performance.png'
+output_path = output_dir / 'fashionmnist_scaling_performance.png'
 plt.savefig(output_path, dpi=300, bbox_inches='tight', pad_inches=0.2)
 print(f"Plot saved as {output_path}")

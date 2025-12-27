@@ -20,19 +20,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import os
 import time
-from mdaisy import get_resnet18_fashionmnist
-
-def setup():
-    """Initialize the process group"""
-    local_rank = int(os.environ.get('LOCAL_RANK', 0))
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
-    return rank, dist.get_world_size(), local_rank
-
-def cleanup():
-    """Clean up the process group"""
-    dist.destroy_process_group()
+from mdaisy import get_resnet18_fashionmnist, setup_distributed, cleanup_distributed
 
 def benchmark_distributed_inference_queue(num_requests=1000, batch_size=1):
     """
@@ -44,7 +32,7 @@ def benchmark_distributed_inference_queue(num_requests=1000, batch_size=1):
     - Each GPU processes requests as they are assigned (queue-like behavior)
     - This is more realistic for production where requests arrive dynamically
     """
-    rank, world_size, local_rank = setup()
+    rank, world_size, local_rank = setup_distributed()
     
     # Load model on each GPU
     model = get_resnet18_fashionmnist(num_classes=10).cuda()
@@ -125,7 +113,7 @@ def benchmark_distributed_inference_queue(num_requests=1000, batch_size=1):
         print(f"Average latency per request: {total_time / total_requests * 1000:.2f} ms")
         print(f"Requests per GPU: {[int(r.item()) for r in gathered_requests]}")
     
-    cleanup()
+    cleanup_distributed()
     return throughput, total_time
 
 if __name__ == "__main__":

@@ -17,25 +17,13 @@ import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import datasets, transforms
-from mdaisy import get_resnet18_cifar10
+from mdaisy import get_resnet18_cifar10, setup_distributed, cleanup_distributed
 import os
 import time
 
-def setup():
-    """Initialize the process group using torchrun environment variables"""
-    local_rank = int(os.environ.get('LOCAL_RANK', 0))
-    torch.cuda.set_device(local_rank)
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
-    return rank, dist.get_world_size(), local_rank
-
-def cleanup():
-    """Clean up the process group"""
-    dist.destroy_process_group()
-
 def train_ddp(num_epochs=20):
     """Run distributed training using PyTorch DDP"""
-    rank, world_size, local_rank = setup()
+    rank, world_size, local_rank = setup_distributed()
     
     # Data loading with distributed sampler
     transform_train = transforms.Compose([
@@ -155,7 +143,7 @@ def train_ddp(num_epochs=20):
         print(f"Total training time: {total_time:.2f}s ({total_time/60:.2f} minutes)")
         print(f"Final test accuracy: {test_acc:.2f}%")
     
-    cleanup()
+    cleanup_distributed()
 
 if __name__ == "__main__":
     import argparse
